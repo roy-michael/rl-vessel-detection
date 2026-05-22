@@ -16,7 +16,7 @@ async def main():
     min_freq = 0
     max_freq = 2000
     n_fft = 8 * 1024
-    hop_length = int(1 * 1024)
+    hop_length = n_fft // 16 # int(1 * 1024)
     window_sec = 15.0
 
     try:

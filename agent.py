@@ -64,16 +64,18 @@ class DispatcherAgent:
         self.fig.colorbar(self.img, ax=self.ax_spec, format="%+2.0f dB")
 
         self.lines_nmf = []
-        nmf_x_axis = np.linspace(-self.window_sec, 0, self.frames_per_window)
+        # X axis is now frequencies instead of time
+        nmf_x_axis = self._env.freqs_plot
         for i in range(self.n_components):
-            line, = self.ax_nmf.plot(nmf_x_axis, self.activations_buffer[i], label=f'C{i+1}')
+            line, = self.ax_nmf.plot(nmf_x_axis, np.zeros(num_freq_bins), label=f'C{i+1}')
             self.lines_nmf.append(line)
         self.ax_nmf.legend(loc='upper right')
-        self.ax_nmf.set_title('NMF Activations')
-        self.ax_nmf.set_xlabel("Time (s, relative to now)")
-        self.ax_nmf.set_ylabel('Activation Level')
-        self.ax_nmf.set_xlim(self.xaxis_extent)
-        self.ax_nmf.set_ylim(0, 1)
+        self.ax_nmf.set_title('Current NMF Activations (Frequency Domain)')
+        self.ax_nmf.set_xlabel("Frequency (Hz)")
+        self.ax_nmf.set_ylabel('Magnitude')
+        self.ax_nmf.set_xlim(self._env.freqs_plot[0], self._env.freqs_plot[-1])
+        # Y axis is absolute between 0 and 0.1
+        self.ax_nmf.set_ylim(0, 0.1)
 
         plt.show(block=False)
 
@@ -104,7 +106,7 @@ class DispatcherAgent:
             warnings.simplefilter("ignore", category=ConvergenceWarning)
             # transform expects shape (n_samples, n_features) -> (1, n_features)
             # Make sure to convert frame data to float64 to match model components dtype
-            W_frame = self._nmf_model.transform(frame_data.T.astype(np.float64))
+            W_frame = self._nmf_model.transform(frame_data.T.astype(np.float64)) 
             return W_frame.T
 
     async def _background_fit_nmf(self):
@@ -140,15 +142,18 @@ class DispatcherAgent:
             f"Buffer: {buffer_size}/{self._env.max_buffered_chunks} Frames ({buffer_percentage:.0f}%)"
         )
         
-        max_activation = 0
-        for i, line in enumerate(self.lines_nmf):
-            line.set_ydata(self.activations_buffer[i])
-            max_activation = max(max_activation, np.max(self.activations_buffer[i]))
+        if self._nmf_model is not None:
+            # H contains the frequency templates (n_components, num_freq_bins)
+            H = self._nmf_model.components_
+            # Get the very latest temporal activations
+            current_activations = self.activations_buffer[:, -1]
             
-        current_ylim = self.ax_nmf.get_ylim()
-        target_ymax = max(1e-3, max_activation * 1.1)
-        if target_ymax > current_ylim[1] or target_ymax < current_ylim[1] * 0.8:
-            self.ax_nmf.set_ylim(0, target_ymax)
+            for i, line in enumerate(self.lines_nmf):
+                # Scale the frequency template by its current activation
+                line.set_ydata(H[i] * current_activations[i])
+        else:
+            for line in self.lines_nmf:
+                line.set_ydata(np.zeros(len(self._env.freqs_plot)))
 
     async def _read_observations_loop(self):
         """Continuously reads from the environment and updates data buffers."""
