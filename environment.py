@@ -15,9 +15,9 @@ class Environment:
     def __init__(self,
                  file_dir,
                  min_freq=0,
-                 max_freq= 2000,
-                 n_fft= 32 * 1024,
-                 hop_length= 1024,
+                 max_freq=2000,
+                 n_fft=32 * 1024,
+                 hop_length=1024,
                  max_buffered_sec=120):
 
         self.file_dir = file_dir
@@ -41,7 +41,8 @@ class Environment:
 
         # Buffer will now store single STFT frames (columns)
         self.chunk_buffer = collections.deque()
-        self.max_buffered_chunks = max_buffered_sec * librosa.time_to_frames(1.0, sr=self.sr, hop_length=self.fft_hop_length)
+        self.max_buffered_chunks = max_buffered_sec * librosa.time_to_frames(1.0, sr=self.sr,
+                                                                             hop_length=self.fft_hop_length)
         self.file_index = 0
         self.reading = True
 
@@ -49,56 +50,6 @@ class Environment:
         self.data_available = asyncio.Event()
 
         self.global_max = 1e-6
-
-    async def _read_files_loop(self):
-        # We need a temporary buffer to hold data while we split it into 1-second chunks
-        leftover_data = np.array([], dtype=np.float32)
-
-        while self.file_index < len(self.wav_files):
-            async with self.buffer_lock:
-                buffer_size = len(self.chunk_buffer)
-
-            # If the buffer is full, wait before loading more files
-            if buffer_size >= self.max_buffered_chunks:
-                await asyncio.sleep(0.1)
-                continue
-
-            file_path = self.wav_files[self.file_index]
-
-            try:
-                # Load the entire audio file into memory
-                y, _ = await asyncio.to_thread(librosa.load, file_path, sr=self.sr, mono=True)
-
-                # Combine with any leftover data from the previous file
-                current_data = np.concatenate((leftover_data, y))
-
-                # Split the data into 1-second chunks
-                num_full_chunks = len(current_data) // self.samples_per_second
-
-                async with self.buffer_lock:
-                    for i in range(num_full_chunks):
-                        start_idx = i * self.samples_per_second
-                        end_idx = start_idx + self.samples_per_second
-                        chunk = current_data[start_idx:end_idx]
-                        self.chunk_buffer.append(chunk)
-                    self.data_available.set()
-
-                # Keep the remainder for the next file
-                leftover_data = current_data[num_full_chunks * self.samples_per_second:]
-
-            except Exception as e:
-                print(f"Error loading {file_path}: {e}")
-
-            self.file_index += 1
-
-        # Add any final leftover data if it's not empty, even if it's less than 1 second
-        if len(leftover_data) > 0:
-            async with self.buffer_lock:
-                self.chunk_buffer.append(leftover_data)
-                self.data_available.set()
-
-        self.reading = False
-        self.data_available.set()
 
     async def _read_files_loop_fft(self):
         while self.file_index < len(self.wav_files):
@@ -133,7 +84,6 @@ class Environment:
 
     async def start(self):
         # Start background reading task
-        # asyncio.create_task(self._read_files_loop())
         asyncio.create_task(self._read_files_loop_fft())
 
     async def get_buffer_status(self):
@@ -151,7 +101,7 @@ class Environment:
                     if remove_from_buffer:
                         frame = self.chunk_buffer.popleft()
                     else:
-                        frame = self.chunk_buffer[0] # Peek at the first item
+                        frame = self.chunk_buffer[0]  # Peek at the first item
                 elif not self.reading:
                     return None, None  # No more data and finished reading
                 else:
@@ -159,7 +109,7 @@ class Environment:
 
             if frame is None and self.reading:
                 await self.data_available.wait()
-        
+
         if frame is not None:
             # Update global max for dB scaling
             local_max = np.max(np.abs(frame))
