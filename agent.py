@@ -9,6 +9,315 @@ from sklearn.decomposition import NMF
 from sklearn.exceptions import ConvergenceWarning
 
 
+
+class VesselState:
+    def __init__(self, start_time, initial_freq, initial_spread, vessel_id=None):
+        self.start_time = start_time
+        self.end_time = None
+        self.frequencies = [initial_freq]
+        self.spreads = [initial_spread]
+        self.vessel_id = vessel_id
+
+    def add_observation(self, freq, spread):
+        self.frequencies.append(freq)
+        self.spreads.append(spread)
+
+    def close(self, end_time):
+        self.end_time = end_time
+
+    @property
+    def mean_frequency(self):
+        return float(np.mean(self.frequencies))
+
+    @property
+    def total_variance(self):
+        drift_variance = float(np.var(self.frequencies))
+        inner_variance = float(np.mean(np.array(self.spreads) ** 2))
+        return drift_variance + inner_variance
+
+
+class VesselStateTracker:
+    def __init__(self, drift_threshold_hz=35.0, min_vessel_score=0.45, min_duration_sec=10.0):
+        self.drift_threshold_hz = drift_threshold_hz
+        self.min_vessel_score = min_vessel_score
+        self.min_duration_sec = min_duration_sec
+        
+        self.states = []                  # completed/archived states
+        self.active_states = {}           # active_state_obj -> active_state_obj
+        self.last_seen_time = {}          # active_state_obj -> float (last seen timestamp)
+        self.vessel_counter = 0
+
+    @property
+    def current_state(self):
+        if self.active_states:
+            return next(iter(self.active_states.values()))
+        return None
+
+    def cluster_active_states(self, current_time):
+        """
+        Runs a real-time spectral clustering over active states to merge duplicates
+        (proximity within 45 Hz) and harmonics (integer multiples) under the same Vessel ID.
+        """
+        active_list = list(self.active_states.values())
+        n = len(active_list)
+        if n < 2:
+            return
+            
+        merged_any = False
+        
+        for i in range(n):
+            for j in range(i + 1, n):
+                stateA = active_list[i]
+                stateB = active_list[j]
+                
+                # Skip if they already have the same Vessel ID
+                if stateA.vessel_id == stateB.vessel_id:
+                    continue
+                    
+                meanA = stateA.mean_frequency
+                meanB = stateB.mean_frequency
+                if meanA == 0 or meanB == 0:
+                    continue
+                    
+                should_merge = False
+                reason = ""
+                
+                # Case 1: Proximity check (same physical vessel split across NMF components)
+                if abs(meanA - meanB) <= 45.0:
+                    should_merge = True
+                    reason = f"frequency proximity ({meanB:.1f}Hz vs {meanA:.1f}Hz)"
+                    
+                # Case 2: Harmonic relationship check
+                else:
+                    ratio = meanB / meanA
+                    for k in range(2, 9):
+                        if abs(ratio - k) <= 0.06 * k:
+                            should_merge = True
+                            reason = f"Harmonic {k} relationship ({meanB:.0f}Hz is {k}x of {meanA:.0f}Hz)"
+                            break
+                        if abs(1.0/ratio - k) <= 0.06 * k:
+                            should_merge = True
+                            reason = f"Fundamental relationship ({meanB:.0f}Hz is 1/{k}th of {meanA:.0f}Hz)"
+                            break
+                            
+                if should_merge:
+                    # Determine which ID to keep (the older one / smaller counter index)
+                    idA = stateA.vessel_id
+                    idB = stateB.vessel_id
+                    
+                    try:
+                        numA = int(idA.split()[-1])
+                        numB = int(idB.split()[-1])
+                        keep_id = idA if numA < numB else idB
+                        discard_id = idB if numA < numB else idA
+                    except Exception:
+                        keep_id = idA
+                        discard_id = idB
+                        
+                    # Perform the merge!
+                    stateA.vessel_id = keep_id
+                    stateB.vessel_id = keep_id
+                    
+                    # Update all historical completed states
+                    merge_count = 0
+                    for s in self.states:
+                        if s.vessel_id == discard_id:
+                            s.vessel_id = keep_id
+                            merge_count += 1
+                            
+                    print(f"\n>>> [{current_time:.1f}s] Merged {discard_id} into {keep_id} due to {reason} (Merged {merge_count} archived stages)")
+                    merged_any = True
+                    break
+            if merged_any:
+                break
+
+    def update_multi(self, current_time, detections):
+        """
+        Detections is a list of dicts: 
+        [{'component_index': i, 'score': score, 'centroid': centroid, 'spread': spread}, ...]
+        """
+        # 0. Perform real-time spectral clustering to merge duplicate/harmonic active states
+        self.cluster_active_states(current_time)
+
+        # 1. Close active states that have timed out (> 45s of no updates)
+        timeout_limit = 45.0
+        states_to_close = []
+        for active_state in list(self.active_states.values()):
+            if current_time - self.last_seen_time[active_state] > timeout_limit:
+                states_to_close.append(active_state)
+        for state in states_to_close:
+            print(f"\n>>> [{current_time:.1f}s] Active state for {state.vessel_id} at {state.mean_frequency:.1f}Hz timed out.")
+            self.close_state(state, current_time)
+
+        # 2. Filter valid detections
+        valid_detections = []
+        for det in detections:
+            if det['score'] >= self.min_vessel_score and det['centroid'] > 0:
+                valid_detections.append(det)
+
+        matched_detections = set() # indices in valid_detections
+        matched_active_states = set() # VesselState objects
+
+        # 3. Associate valid detections with active states (Nearest Neighbor in frequency <= 60 Hz)
+        active_list = list(self.active_states.values())
+        
+        for active_state in active_list:
+            best_det_idx = None
+            best_freq_diff = float('inf')
+            
+            for det_idx, det in enumerate(valid_detections):
+                if det_idx in matched_detections:
+                    continue
+                freq_diff = abs(det['centroid'] - active_state.mean_frequency)
+                if freq_diff <= 60.0 and freq_diff < best_freq_diff:
+                    best_freq_diff = freq_diff
+                    best_det_idx = det_idx
+            
+            if best_det_idx is not None:
+                det = valid_detections[best_det_idx]
+                active_state.add_observation(det['centroid'], det['spread'])
+                self.last_seen_time[active_state] = current_time
+                matched_detections.add(best_det_idx)
+                matched_active_states.add(active_state)
+
+        # 4. Check for Speed Changes (frequency drift <= 120 Hz OR doubling/halving) for remaining unmatched active states
+        for active_state in active_list:
+            if active_state in matched_active_states:
+                continue
+                
+            best_det_idx = None
+            best_freq_diff = float('inf')
+            
+            for det_idx, det in enumerate(valid_detections):
+                if det_idx in matched_detections:
+                    continue
+                
+                centroid = det['centroid']
+                mean_f = active_state.mean_frequency
+                
+                # Model the physical expectation of the vessel's speed profiles
+                dist_normal = abs(centroid - mean_f)
+                dist_doubled = abs(centroid - 2.0 * mean_f)
+                dist_halved = abs(centroid - 0.5 * mean_f)
+                
+                best_match_dist = float('inf')
+                is_match = False
+                
+                if dist_normal <= 120.0:
+                    best_match_dist = dist_normal
+                    is_match = True
+                if dist_doubled <= 150.0:  # Allow 150 Hz margin around the doubled frequency
+                    if dist_doubled < best_match_dist:
+                        best_match_dist = dist_doubled
+                        is_match = True
+                if dist_halved <= 80.0:   # Allow 80 Hz margin around halved frequency
+                    if dist_halved < best_match_dist:
+                        best_match_dist = dist_halved
+                        is_match = True
+                        
+                if is_match and best_match_dist < best_freq_diff:
+                    best_freq_diff = best_match_dist
+                    best_det_idx = det_idx
+                    
+            if best_det_idx is not None:
+                det = valid_detections[best_det_idx]
+                vessel_id = active_state.vessel_id
+                # Close old speed state
+                self.close_state(active_state, current_time)
+                # Start new speed state for the SAME vessel ID
+                new_state = VesselState(current_time, det['centroid'], det['spread'], vessel_id=vessel_id)
+                self.active_states[new_state] = new_state
+                self.last_seen_time[new_state] = current_time
+                print(f"\n>>> [{current_time:.1f}s] {vessel_id} Changed Speed! New Freq: {det['centroid']:.1f} Hz")
+                matched_detections.add(best_det_idx)
+                matched_active_states.add(active_state)
+
+        # 5. Check for Re-acquisition from archived/completed states (ended within 45s, frequency diff <= 60 Hz)
+        for det_idx, det in enumerate(valid_detections):
+            if det_idx in matched_detections:
+                continue
+                
+            best_state = None
+            best_freq_diff = float('inf')
+            
+            for state in self.states:
+                if state.end_time and (current_time - state.end_time <= 45.0):
+                    freq_diff = abs(det['centroid'] - state.mean_frequency)
+                    if freq_diff <= 60.0 and freq_diff < best_freq_diff:
+                        best_freq_diff = freq_diff
+                        best_state = state
+                        
+            if best_state is not None:
+                vid = best_state.vessel_id
+                # Re-activate vessel
+                new_state = VesselState(current_time, det['centroid'], det['spread'], vessel_id=vid)
+                self.active_states[new_state] = new_state
+                self.last_seen_time[new_state] = current_time
+                print(f"\n>>> [{current_time:.1f}s] Re-acquired {vid} at {det['centroid']:.1f} Hz")
+                matched_detections.add(det_idx)
+
+        # 6. Check for Harmonics Association (integer multiples/divisors) with active vessels
+        for det_idx, det in enumerate(valid_detections):
+            if det_idx in matched_detections:
+                continue
+                
+            centroid = det['centroid']
+            matched_vessel_id = None
+            matched_reason = ""
+            
+            for active_state in list(self.active_states.values()):
+                mean_f = active_state.mean_frequency
+                if mean_f == 0 or centroid == 0:
+                    continue
+                    
+                ratio = centroid / mean_f
+                # Check harmonics up to the 8th order
+                for k in range(2, 9):
+                    # det is a harmonic of active_state
+                    if abs(ratio - k) <= 0.06 * k:
+                        matched_vessel_id = active_state.vessel_id
+                        matched_reason = f"Harmonic {k} of fundamental {mean_f:.0f}Hz"
+                        break
+                    # det is the fundamental, active_state is a harmonic
+                    if abs(1.0/ratio - k) <= 0.06 * k:
+                        matched_vessel_id = active_state.vessel_id
+                        matched_reason = f"Fundamental of harmonic {mean_f:.0f}Hz (1/{k}th)"
+                        break
+                        
+                if matched_vessel_id:
+                    break
+                    
+            if matched_vessel_id:
+                new_state = VesselState(current_time, det['centroid'], det['spread'], vessel_id=matched_vessel_id)
+                self.active_states[new_state] = new_state
+                self.last_seen_time[new_state] = current_time
+                print(f"\n>>> [{current_time:.1f}s] Associated Harmonic target with {matched_vessel_id} at {centroid:.1f} Hz ({matched_reason})")
+                matched_detections.add(det_idx)
+
+        # 7. Spurious new detections -> spawn a new Vessel ID!
+        for det_idx, det in enumerate(valid_detections):
+            if det_idx in matched_detections:
+                continue
+                
+            self.vessel_counter += 1
+            vid = f"Vessel {self.vessel_counter}"
+            
+            new_state = VesselState(current_time, det['centroid'], det['spread'], vessel_id=vid)
+            self.active_states[new_state] = new_state
+            self.last_seen_time[new_state] = current_time
+            print(f"\n>>> [{current_time:.1f}s] New Vessel Detected! Assigned ID: {vid} at {det['centroid']:.1f} Hz")
+
+    def close_state(self, state, current_time):
+        self.active_states.pop(state, None)
+        self.last_seen_time.pop(state, None)
+        state.close(current_time)
+        duration = state.end_time - state.start_time
+        if duration >= self.min_duration_sec:
+            self.states.append(state)
+            print(f">>> [STORED SPEED STATE] {state.vessel_id} | Mean Freq: {state.mean_frequency:.1f} Hz | "
+                  f"Interval: {state.start_time:.1f}s - {state.end_time:.1f}s (Duration: {duration:.1f}s)")
+
+
 class DispatcherAgent:
     """
     The dispatcher agent definition.
@@ -38,12 +347,25 @@ class DispatcherAgent:
     def _setup_plot(self):
         plt.ion()
         
-        self.fig, (self.ax_spec, self.ax_nmf) = plt.subplots(
-            2, 1, 
-            figsize=(12, 8),
-            gridspec_kw={'height_ratios': [3, 2]}
+        self.fig, (self.ax_spec, self.ax_nmf, self.ax_track) = plt.subplots(
+            3, 1, 
+            figsize=(12, 11),
+            gridspec_kw={'height_ratios': [3, 2, 2]}
         )
-        self.fig.subplots_adjust(hspace=0.5)
+        self.fig.subplots_adjust(hspace=0.6)
+        
+        # Tracker visualization setup
+        self.ax_kde = self.ax_track.twiny()
+        self.ax_track.set_xlim(0, 15.0)
+        self.ax_track.set_ylim(self.min_freq, self.max_freq)
+        self.ax_track.set_xlabel("Absolute Time (seconds)")
+        self.ax_track.set_ylabel("Frequency (Hz)")
+        self.ax_track.set_title("Vessel Speed States Timeline")
+        self.ax_track.grid(True, linestyle="--", alpha=0.5)
+
+        self.ax_kde.set_xlim(0, 1.1)
+        self.ax_kde.set_xlabel("Probability Density (KDE)", color="purple")
+        self.ax_kde.tick_params(axis='x', colors="purple")
         
         self.xaxis_extent = [-self.window_sec, 0]
 
@@ -264,8 +586,13 @@ class SignalProcessorAgent:
                                  bbox=dict(boxstyle='round,pad=0.2', fc='black', alpha=0.6))
             self._annotations.append(annotation)
 
+        # Vessel Speed Tracking
+        self.tracker = VesselStateTracker(drift_threshold_hz=15.0, min_vessel_score=0.45)
+        self.smoothed_centroids = np.zeros(self.n_components)
+        self.smoothed_spreads = np.zeros(self.n_components)
+
     def _analyze_component_peaks(self, component_index, H_component, freqs):
-        """Finds peaks in an NMF component and calculates their weighted statistics."""
+        """Finds peaks in an NMF component and calculates their statistics around the dominant tonal peak."""
         max_h = np.max(H_component)
         if max_h == 0:
             self.peak_centroids[component_index] = 0
@@ -275,20 +602,26 @@ class SignalProcessorAgent:
         # Find significant peaks
         peaks, _ = find_peaks(H_component, height=max_h * 0.05, prominence=max_h * 0.02)
         
-        n_peaks = len(peaks)
-        if n_peaks > 0:
-            peak_freqs = freqs[peaks]
-            peak_weights = H_component[peaks]
+        if len(peaks) > 0:
+            # 1. Isolate the single tallest peak (dominant tonal)
+            tallest_idx = np.argmax(H_component[peaks])
+            dom_peak = peaks[tallest_idx]
             
-            # Use peak heights as weights for the mean and variance
-            weight_sum = np.sum(peak_weights)
-            if weight_sum > 0:
-                centroid = np.sum(peak_freqs * peak_weights) / weight_sum
-                variance = np.sum((peak_freqs - centroid)**2 * peak_weights) / weight_sum
-                spread = np.sqrt(variance)
+            # 2. Measure spread strictly in a local window of 7 bins around the dominant peak
+            local_window = slice(max(0, dom_peak - 3), min(len(H_component), dom_peak + 4))
+            local_freqs = freqs[local_window]
+            local_weights = H_component[local_window]
+            
+            local_weight_sum = np.sum(local_weights)
+            if local_weight_sum > 0:
+                local_centroid = np.sum(local_freqs * local_weights) / local_weight_sum
+                local_variance = np.sum((local_freqs - local_centroid)**2 * local_weights) / local_weight_sum
                 
-                self.peak_centroids[component_index] = centroid
-                self.peak_spreads[component_index] = spread
+                self.peak_centroids[component_index] = local_centroid
+                self.peak_spreads[component_index] = np.sqrt(local_variance)
+            else:
+                self.peak_centroids[component_index] = freqs[dom_peak]
+                self.peak_spreads[component_index] = 0.0
         else:
             # If no peaks are found, reset the stats
             self.peak_centroids[component_index] = 0
@@ -334,6 +667,42 @@ class SignalProcessorAgent:
                     
                     # --- Peak Analysis ---
                     self._analyze_component_peaks(i, h_i, freqs)
+
+                # Track all components that meet the vessel score criteria
+                if len(self.vessel_scores) > 0:
+                    detections = []
+                    for i in range(self.n_components):
+                        score = self.vessel_scores[i]
+                        raw_centroid = self.peak_centroids[i]
+                        raw_spread = self.peak_spreads[i]
+                        
+                        # Apply exponential moving average (smoothing) to reduce tracking jitter
+                        if raw_centroid > 0:
+                            alpha = 0.25  # Smoothing factor
+                            if self.smoothed_centroids[i] == 0:
+                                self.smoothed_centroids[i] = raw_centroid
+                                self.smoothed_spreads[i] = raw_spread
+                            else:
+                                self.smoothed_centroids[i] = (alpha * raw_centroid) + ((1.0 - alpha) * self.smoothed_centroids[i])
+                                self.smoothed_spreads[i] = (alpha * raw_spread) + ((1.0 - alpha) * self.smoothed_spreads[i])
+                                
+                            centroid = self.smoothed_centroids[i]
+                            spread = self.smoothed_spreads[i]
+                        else:
+                            centroid = 0
+                            spread = 0
+                            
+                        detections.append({
+                            'component_index': i,
+                            'score': score,
+                            'centroid': centroid,
+                            'spread': spread
+                        })
+                    
+                    self.tracker.update_multi(
+                        current_time=self._dispatcher.current_time,
+                        detections=detections
+                    )
             
             await asyncio.sleep(self._analysis_interval_sec)
             
@@ -361,12 +730,214 @@ class SignalProcessorAgent:
             
             self._dispatcher.lines_nmf[i].set_color(plt.cm.coolwarm(score))
 
+    def _update_tracker_plot(self):
+        """Draws the speed timeline and the probability density curve on ax_track and ax_kde."""
+        if not hasattr(self._dispatcher, 'ax_track') or not plt.fignum_exists(self._dispatcher.fig.number):
+            return
+            
+        # 1. Clear both axes
+        self._dispatcher.ax_track.clear()
+        self._dispatcher.ax_kde.clear()
+
+        # Re-enable grids and limits for ax_track since we cleared it
+        self._dispatcher.ax_track.grid(True, linestyle="--", alpha=0.5)
+        self._dispatcher.ax_track.set_ylim(self._dispatcher.min_freq, self._dispatcher.max_freq)
+        self._dispatcher.ax_track.set_xlabel("Absolute Time (seconds)")
+        self._dispatcher.ax_track.set_ylabel("Frequency (Hz)")
+        self._dispatcher.ax_track.set_title("Vessel Speed States Timeline")
+
+        # 2. Get all states (archived + active if stable)
+        all_states = list(self.tracker.states)
+        for active_state in self.tracker.active_states.values():
+            active_duration = self._dispatcher.current_time - active_state.start_time
+            if active_duration >= self.tracker.min_duration_sec:
+                all_states.append(active_state)
+
+        # 3. Group states by their Vessel ID
+        vessel_groups = {}
+        for state in all_states:
+            vid = state.vessel_id if state.vessel_id else "Noise"
+            if vid not in vessel_groups:
+                vessel_groups[vid] = []
+            vessel_groups[vid].append(state)
+
+        # 4. Calculate total cumulative tracking duration for each Vessel ID
+        vessel_durations = []
+        for vid, states in vessel_groups.items():
+            total_duration = 0.0
+            for s in states:
+                end_t = s.end_time if s.end_time else self._dispatcher.current_time
+                total_duration += (end_t - s.start_time)
+            vessel_durations.append((vid, total_duration, states))
+
+        # Sort vessels by cumulative duration (most dominant vessels first)
+        vessel_durations.sort(key=lambda x: x[1], reverse=True)
+
+        # We keep the top 8 most dominant vessels (supporting more simultaneous clusters)
+        max_vessels = 8
+        dominant_vessels = vessel_durations[:max_vessels]
+        minor_vessels = vessel_durations[max_vessels:]
+
+        # Map each vessel group to its metadata
+        vessel_metadata = {}
+        for rank_idx, (vid, dur, states) in enumerate(dominant_vessels):
+            # Calculate overall weighted mean frequency for this vessel across all its speed levels
+            freqs = [s.mean_frequency for s in states]
+            weights = [(s.end_time or self._dispatcher.current_time) - s.start_time for s in states]
+            total_w = sum(weights) if sum(weights) > 0 else 1.0
+            overall_mean_f = sum(f * w for f, w in zip(freqs, weights)) / total_w
+            
+            vessel_metadata[vid] = {
+                'is_dominant': True,
+                'color_idx': rank_idx,
+                'label': f"{vid} (~{overall_mean_f:.0f}Hz)",
+                'states': states
+            }
+
+        for vid, dur, states in minor_vessels:
+            vessel_metadata[vid] = {
+                'is_dominant': False,
+                'color_idx': -1,
+                'label': "Minor Noise / Interference",
+                'states': states
+            }
+
+        # 5. Draw each segment and draw connecting transition guidelines
+        cmap = plt.cm.get_cmap("tab10")
+        labeled_vessels = set()
+        
+        total_time = max(15.0, self._dispatcher.current_time)
+        # Only label segments that are at least 1.5% of total session time
+        label_threshold_sec = max(15.0, 0.015 * total_time) 
+
+        for vid, meta in vessel_metadata.items():
+            color = cmap(meta['color_idx'] % 10) if meta['is_dominant'] else "lightgrey"
+            linestyle_segment = "--" if any(s in self.tracker.active_states.values() for s in meta['states']) else "-"
+            
+            # Sort segments of this vessel chronologically to draw transitions
+            sorted_segs = sorted(meta['states'], key=lambda s: s.start_time)
+            
+            # Draw segment lines and shaded variance
+            for j, state in enumerate(sorted_segs):
+                is_active = (state in self.tracker.active_states.values())
+                start_t = state.start_time
+                end_t = state.end_time if state.end_time else self._dispatcher.current_time
+                duration = end_t - start_t
+                
+                mean_f = state.mean_frequency
+                std_f = np.sqrt(state.total_variance)
+                
+                if meta['is_dominant']:
+                    linestyle = "--" if is_active else "-"
+                    linewidth = 3.5
+                    alpha_val = 0.95
+                    
+                    # Shaded variance band for dominant vessels
+                    self._dispatcher.ax_track.fill_between(
+                        [start_t, end_t], 
+                        [mean_f - std_f, mean_f - std_f], 
+                        [mean_f + std_f, mean_f + std_f],
+                        color=color, alpha=0.15
+                    )
+                    
+                    # Single legend entry per dominant vessel
+                    vessel_label = meta['label']
+                    legend_label = vessel_label if vessel_label not in labeled_vessels else ""
+                    labeled_vessels.add(vessel_label)
+                    
+                    # Plot segment bar
+                    self._dispatcher.ax_track.plot(
+                        [start_t, end_t], [mean_f, mean_f], 
+                        color=color, linestyle=linestyle, linewidth=linewidth, alpha=alpha_val,
+                        label=legend_label
+                    )
+                    
+                    # Draw text label only on long, stable segments to prevent overlap clutter
+                    if duration >= label_threshold_sec:
+                        self._dispatcher.ax_track.text(
+                            (start_t + end_t) / 2, mean_f + std_f + 5.0, 
+                            f"{mean_f:.0f}Hz ± {std_f:.0f}",
+                            color=color, fontsize=8, ha="center", va="bottom",
+                            weight="bold",
+                            bbox=dict(boxstyle="round,pad=0.15", fc="white", alpha=0.85, ec=color, lw=0.5)
+                        )
+                else:
+                    # Minor/transient noise: draw as a thin, faded grey background line
+                    self._dispatcher.ax_track.plot(
+                        [start_t, end_t], [mean_f, mean_f], 
+                        color=color, linestyle="-", linewidth=1.0, alpha=0.25
+                    )
+
+            # Draw dotted transition guidelines strictly between dominant vessel segments
+            if meta['is_dominant'] and len(sorted_segs) > 1:
+                for j in range(len(sorted_segs) - 1):
+                    segA = sorted_segs[j]
+                    segB = sorted_segs[j+1]
+                    
+                    endA_t = segA.end_time if segA.end_time else self._dispatcher.current_time
+                    startB_t = segB.start_time
+                    
+                    meanA_f = segA.mean_frequency
+                    meanB_f = segB.mean_frequency
+                    
+                    # Connect transition guide
+                    self._dispatcher.ax_track.plot(
+                        [endA_t, startB_t], [meanA_f, meanB_f],
+                        color=color, linestyle=":", linewidth=2.0, alpha=0.7
+                    )
+
+        # Set x limits on timeline to absolute time
+        self._dispatcher.ax_track.set_xlim(0, max(15.0, self._dispatcher.current_time))
+        if all_states:
+            self._dispatcher.ax_track.legend(loc="upper left", fontsize=8)
+
+        # 6. Draw the probability density curve on ax_kde
+        freq_axis = self._dispatcher._env.freqs_plot
+        pdf = np.zeros_like(freq_axis, dtype=np.float64)
+        
+        # Calculate log-duration weighted PDF using all stable vessel states
+        # This ensures all distinct speed stages (clusters) display visible, clear peaks
+        if all_states:
+            for state in all_states:
+                duration = (state.end_time or self._dispatcher.current_time) - state.start_time
+                if duration <= 0:
+                    duration = 0.5
+                
+                mean = state.mean_frequency
+                variance = max(state.total_variance, 4.0)
+                
+                # Gaussian kernel peak (normalized to peak height = 1.0)
+                exponent = -0.5 * ((freq_axis - mean) ** 2) / variance
+                density = np.exp(exponent)
+                
+                # Weight by log-duration so short stable states are not suppressed by long ones
+                weight = np.log1p(duration)
+                pdf += weight * density
+                
+            max_pdf = np.max(pdf)
+            if max_pdf > 0:
+                pdf = pdf / max_pdf
+
+        # Plot PDF vertically on ax_kde (x = probability, y = frequency)
+        self._dispatcher.ax_kde.plot(pdf, freq_axis, color="purple", linewidth=1.5, alpha=0.8, label="Freq Probability")
+        self._dispatcher.ax_kde.fill_betweenx(freq_axis, 0, pdf, color="purple", alpha=0.15)
+        
+        # Configure ax_kde
+        self._dispatcher.ax_kde.set_xlim(0, 1.1)
+        self._dispatcher.ax_kde.set_xlabel("Probability Density (KDE)", color="purple")
+        self._dispatcher.ax_kde.tick_params(axis='x', colors="purple")
+
     async def _plot_update_loop(self):
         while True:
-            if not self._dispatcher.fig.canvas.manager.window:
+            if not plt.fignum_exists(self._dispatcher.fig.number):
                 break
             
             self._update_annotations()
+            try:
+                self._update_tracker_plot()
+            except Exception as e:
+                print(f"Error updating tracker plot: {e}")
+                
             await asyncio.sleep(self._analysis_interval_sec)
 
     async def start(self):
