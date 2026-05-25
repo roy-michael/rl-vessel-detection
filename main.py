@@ -49,20 +49,28 @@ async def main():
     # Keep the main thread alive while the agent runs
     # In a real UI application, this would be replaced by the UI event loop
     try:
-        while True:
-            await asyncio.sleep(1)
+        while not agent.completed:
+            await asyncio.sleep(0.5)
     except (asyncio.CancelledError, KeyboardInterrupt):
         pass
     finally:
-        print("\n" + "="*70)
-        print("                 FINAL VESSEL DETECTION & SPEED REPORT")
-        print("="*70)
+        report_lines = []
+        def log(msg=""):
+            print(msg)
+            report_lines.append(msg)
+
+        log("\n" + "="*70)
+        log("                 FINAL VESSEL DETECTION & SPEED REPORT")
+        log("="*70)
         states = list(signal_processor.tracker.states)
-        active_states = list(signal_processor.tracker.active_states.values())
+        active_states = [
+            s for s in signal_processor.tracker.active_states.values()
+            if (agent.current_time - s.start_time) >= signal_processor.tracker.min_duration_sec
+        ]
         all_states = states + active_states
             
         if not all_states:
-            print("No stable vessel states tracked during this run.")
+            log("No stable vessel states tracked during this run.")
         else:
             # Group states by Vessel ID
             vessel_history = {}
@@ -88,16 +96,32 @@ async def main():
                 # Sort segments chronologically
                 segs_sorted = sorted(segs, key=lambda s: s.start_time)
                 
-                print(f"\n>>> {vid} [{dominance_status}] (Total Active Duration: {dur:.1f}s):")
+                log(f"\n>>> {vid} [{dominance_status}] (Total Active Duration: {dur:.1f}s):")
                 for s_idx, state in enumerate(segs_sorted):
                     status = "ACTIVE" if state in active_states else "COMPLETED"
                     s_dur = (state.end_time or agent.current_time) - state.start_time
-                    print(f"  Speed Stage {s_idx+1} [{status}]:")
-                    print(f"    Interval:       {state.start_time:.1f}s - {(state.end_time or agent.current_time):.1f}s (Duration: {s_dur:.1f}s)")
-                    print(f"    Mean Frequency: {state.mean_frequency:.1f} Hz")
-                    print(f"    Total Variance: {state.total_variance:.1f} Hz^2 (Std Dev: {np.sqrt(state.total_variance):.1f} Hz)")
-                print("-" * 55)
-        print("="*70 + "\n")
+                    log(f"  Speed Stage {s_idx+1} [{status}]:")
+                    log(f"    Interval:       {state.start_time:.1f}s - {(state.end_time or agent.current_time):.1f}s (Duration: {s_dur:.1f}s)")
+                    log(f"    Mean Frequency: {state.mean_frequency:.1f} Hz")
+                    log(f"    Total Variance: {state.total_variance:.1f} Hz^2 (Std Dev: {np.sqrt(state.total_variance):.1f} Hz)")
+                log("-" * 55)
+        log("="*70 + "\n")
+
+        # Save the textual report to a file
+        try:
+            with open("vessel_detection_report.txt", "w", encoding="utf-8") as f:
+                f.write("\n".join(report_lines))
+            print("Saved textual report to vessel_detection_report.txt")
+        except Exception as e:
+            print(f"Could not save textual report: {e}")
+
+        # Save the matplotlib figure to an image
+        if agent and hasattr(agent, 'fig') and plt.fignum_exists(agent.fig.number):
+            try:
+                agent.fig.savefig("vessel_detection_timeline.png", bbox_inches="tight", dpi=150)
+                print("Saved final graph to vessel_detection_timeline.png")
+            except Exception as e:
+                print(f"Could not save figure image: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())

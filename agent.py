@@ -5,6 +5,7 @@ import librosa
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.signal import find_peaks
+from scipy.ndimage import median_filter
 from sklearn.decomposition import NMF
 from sklearn.exceptions import ConvergenceWarning
 
@@ -341,6 +342,20 @@ class DispatcherAgent:
         self.nmf_update_period_sec = 5.0  # Re-fit NMF model less frequently
         self._nmf_model = None
 
+        # Denoising configuration parameters
+        self.signal_smoothing_alpha = 0.15
+        self.smoothed_magnitude = None
+        
+        num_bins = len(self._env.freqs_plot)
+        self.spec_sub_kernel = min(51, num_bins // 3)
+        if self.spec_sub_kernel % 2 == 0:
+            self.spec_sub_kernel += 1
+        if self.spec_sub_kernel < 3:
+            self.spec_sub_kernel = 3
+            
+        self.temporal_noise_subtraction_factor = 0.5
+        self.completed = False
+
         # Visualization setup
         self._setup_plot()
 
@@ -503,8 +518,8 @@ class DispatcherAgent:
         while True:
             observation, status = await self._env.observe()
             if observation is None:
-                await asyncio.sleep(0.01)
-                continue
+                self.completed = True
+                break
 
             self.frames_observed += 1
             
@@ -512,16 +527,45 @@ class DispatcherAgent:
             magnitude_frame = np.abs(observation)[self._env.freq_mask].astype(np.float64)
             magnitude_frame = np.maximum(magnitude_frame, 1e-6)
             
-            self.stft_magnitude_buffer = np.roll(self.stft_magnitude_buffer, -1, axis=1)
-            self.stft_magnitude_buffer[:, -1] = magnitude_frame
+            # --- Three-Stage Signal Denoising Pipeline ---
+            # Stage 1: Spectral Median Filtering (estimates and subtracts broadband/diffuse noise floor)
+            broadband_noise_floor = median_filter(magnitude_frame, size=self.spec_sub_kernel)
             
-            frame_db = self._to_decibels(magnitude_frame)
+            # 1.2x over-subtraction to aggressively clean up ambient ocean noise
+            denoised_magnitude = magnitude_frame - 1.2 * broadband_noise_floor
+            denoised_magnitude = np.maximum(denoised_magnitude, 0.03 * broadband_noise_floor)
+            denoised_magnitude = np.maximum(denoised_magnitude, 1e-6)
+            
+            # Stage 2: Temporal Background Subtraction (removes stationary equipment/grid hums)
+            # Only apply if we have enough observations in the buffer for a stable estimate
+            if self.frames_observed > 20:
+                # Calculate long-term median of each frequency bin over the buffered sliding window
+                temporal_background = np.median(self.stft_magnitude_buffer, axis=1)
+                
+                # Subtract a portion of the stationary background hums
+                denoised_magnitude = denoised_magnitude - self.temporal_noise_subtraction_factor * temporal_background
+                denoised_magnitude = np.maximum(denoised_magnitude, 1e-6)
+                
+            # Stage 3: Temporal Recursive Smoothing (EMA filter to prevent frame-to-frame jumping)
+            if self.smoothed_magnitude is None:
+                self.smoothed_magnitude = denoised_magnitude.copy()
+            else:
+                self.smoothed_magnitude = (self.signal_smoothing_alpha * denoised_magnitude) + \
+                                          ((1.0 - self.signal_smoothing_alpha) * self.smoothed_magnitude)
+            
+            # Save the denoised, smoothed frame to our magnitude buffer
+            self.stft_magnitude_buffer = np.roll(self.stft_magnitude_buffer, -1, axis=1)
+            self.stft_magnitude_buffer[:, -1] = self.smoothed_magnitude
+            
+            # Decibel conversion of the denoised & smoothed frame
+            frame_db = self._to_decibels(self.smoothed_magnitude)
             self.S_buffer = np.roll(self.S_buffer, -1, axis=1)
             self.S_buffer[:, -1] = frame_db
             
+            # Project using NMF model on the denoised frame
             new_activation = await asyncio.to_thread(
                 self._transform_nmf_frame, 
-                magnitude_frame.reshape(-1, 1)
+                self.smoothed_magnitude.reshape(-1, 1)
             )
             
             self.activations_buffer = np.roll(self.activations_buffer, -1, axis=1)
