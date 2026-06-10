@@ -38,10 +38,13 @@ class VesselState:
 
 
 class VesselStateTracker:
-    def __init__(self, drift_threshold_hz=35.0, min_vessel_score=0.45, min_duration_sec=10.0):
+    def __init__(self, drift_threshold_hz=35.0, min_vessel_score=0.45, min_duration_sec=10.0, proximity_threshold_hz=65.0, association_threshold_hz=80.0, consolidation_threshold_hz=65.0):
         self.drift_threshold_hz = drift_threshold_hz
         self.min_vessel_score = min_vessel_score
         self.min_duration_sec = min_duration_sec
+        self.proximity_threshold_hz = proximity_threshold_hz
+        self.association_threshold_hz = association_threshold_hz
+        self.consolidation_threshold_hz = consolidation_threshold_hz
         
         self.states = []                  # completed/archived states
         self.active_states = {}           # active_state_obj -> active_state_obj
@@ -84,7 +87,7 @@ class VesselStateTracker:
                 reason = ""
                 
                 # Case 1: Proximity check (same physical vessel split across NMF components)
-                if abs(meanA - meanB) <= 45.0:
+                if abs(meanA - meanB) <= self.proximity_threshold_hz:
                     should_merge = True
                     reason = f"frequency proximity ({meanB:.1f}Hz vs {meanA:.1f}Hz)"
                     
@@ -131,6 +134,90 @@ class VesselStateTracker:
                     break
             if merged_any:
                 break
+                
+    def consolidate_all_vessels(self, current_time):
+        """
+        Consolidates different Vessel IDs together across all completed and active states
+        if their overall weighted mean frequencies are within consolidation_threshold_hz.
+        """
+        active_list = list(self.active_states.values())
+        all_states = self.states + active_list
+        if not all_states:
+            return
+
+        # 1. Group states by Vessel ID
+        vessel_groups = {}
+        for state in all_states:
+            vid = state.vessel_id
+            if not vid or vid == "Noise":
+                continue
+            if vid not in vessel_groups:
+                vessel_groups[vid] = []
+            vessel_groups[vid].append(state)
+
+        if len(vessel_groups) < 2:
+            return
+
+        # 2. Calculate overall weighted mean frequency for each Vessel ID
+        vessel_means = {}
+        for vid, states in vessel_groups.items():
+            total_duration = 0.0
+            weighted_freq_sum = 0.0
+            for s in states:
+                start_t = s.start_time
+                end_t = s.end_time if s.end_time else current_time
+                duration = max(0.1, end_t - start_t)
+                total_duration += duration
+                weighted_freq_sum += s.mean_frequency * duration
+            
+            vessel_means[vid] = weighted_freq_sum / total_duration
+
+        # 3. Compare all pairs and merge if they are close
+        vessels = list(vessel_means.keys())
+        n = len(vessels)
+        merged_any = False
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                vidA = vessels[i]
+                vidB = vessels[j]
+                
+                meanA = vessel_means[vidA]
+                meanB = vessel_means[vidB]
+                
+                if abs(meanA - meanB) <= self.consolidation_threshold_hz:
+                    # Determine which ID to keep (older one, i.e., lower index number)
+                    try:
+                        numA = int(vidA.split()[-1])
+                        numB = int(vidB.split()[-1])
+                        keep_id = vidA if numA < numB else vidB
+                        discard_id = vidB if numA < numB else vidA
+                    except Exception:
+                        keep_id = vidA
+                        discard_id = vidB
+                    
+                    # Rename all states in self.states
+                    merge_count = 0
+                    for s in self.states:
+                        if s.vessel_id == discard_id:
+                            s.vessel_id = keep_id
+                            merge_count += 1
+                            
+                    # Rename active states
+                    for s in self.active_states.values():
+                        if s.vessel_id == discard_id:
+                            s.vessel_id = keep_id
+                            merge_count += 1
+
+                    print(f"\n>>> [{current_time:.1f}s] CONSOLIDATED: Merged {discard_id} (~{meanB:.1f}Hz) into {keep_id} (~{meanA:.1f}Hz) due to close cumulative means (diff: {abs(meanA - meanB):.1f}Hz)")
+                    merged_any = True
+                    break
+            if merged_any:
+                break
+
+        # If a merge happened, recurse to merge any further combinations
+        if merged_any:
+            self.consolidate_all_vessels(current_time)
 
     def update_multi(self, current_time, detections):
         """
@@ -170,7 +257,7 @@ class VesselStateTracker:
                 if det_idx in matched_detections:
                     continue
                 freq_diff = abs(det['centroid'] - active_state.mean_frequency)
-                if freq_diff <= 60.0 and freq_diff < best_freq_diff:
+                if freq_diff <= self.association_threshold_hz and freq_diff < best_freq_diff:
                     best_freq_diff = freq_diff
                     best_det_idx = det_idx
             
@@ -244,7 +331,7 @@ class VesselStateTracker:
             for state in self.states:
                 if state.end_time and (current_time - state.end_time <= 45.0):
                     freq_diff = abs(det['centroid'] - state.mean_frequency)
-                    if freq_diff <= 60.0 and freq_diff < best_freq_diff:
+                    if freq_diff <= self.association_threshold_hz and freq_diff < best_freq_diff:
                         best_freq_diff = freq_diff
                         best_state = state
                         
@@ -307,6 +394,9 @@ class VesselStateTracker:
             self.active_states[new_state] = new_state
             self.last_seen_time[new_state] = current_time
             print(f"\n>>> [{current_time:.1f}s] New Vessel Detected! Assigned ID: {vid} at {det['centroid']:.1f} Hz")
+
+        # 8. Consolidate different Vessel IDs if their overall cumulative means are near
+        self.consolidate_all_vessels(current_time)
 
     def close_state(self, state, current_time):
         self.active_states.pop(state, None)
@@ -411,7 +501,8 @@ class DispatcherAgent:
         self.ax_nmf.set_xlabel("Frequency (Hz)")
         self.ax_nmf.set_ylabel('Weighted Magnitude')
         self.ax_nmf.set_xlim(self._env.freqs_plot[0], self._env.freqs_plot[-1])
-        self.ax_nmf.set_ylim(0, 0.1)
+        self.nmf_ylim_max = 0.1
+        self.ax_nmf.set_ylim(0, self.nmf_ylim_max)
 
         plt.show(block=False)
 
@@ -508,8 +599,16 @@ class DispatcherAgent:
             H = self._nmf_model.components_
             current_activations = self.activations_buffer[:, -1]
             
+            max_val = 0.0
             for i, line in enumerate(self.lines_nmf):
-                line.set_ydata(H[i] * current_activations[i])
+                ydata = H[i] * current_activations[i]
+                line.set_ydata(ydata)
+                max_val = max(max_val, np.max(ydata))
+            
+            # Smoothly auto-scale the y-limit with an EMA to avoid visual jumping
+            target_max = max(max_val * 1.15, 0.01)
+            self.nmf_ylim_max = 0.9 * self.nmf_ylim_max + 0.1 * target_max
+            self.ax_nmf.set_ylim(0, self.nmf_ylim_max)
         else:
             for line in self.lines_nmf:
                 line.set_ydata(np.zeros(len(self._env.freqs_plot)))
@@ -603,10 +702,13 @@ class DispatcherAgent:
 
 
 class SignalProcessorAgent:
-    def __init__(self, dispatcher_agent):
+    def __init__(self, dispatcher_agent, proximity_threshold_hz=65.0, association_threshold_hz=80.0, peak_spread_window_bins=15, variance_multiplier=1.5, min_variance_floor=25.0, consolidation_threshold_hz=65.0):
         self._dispatcher = dispatcher_agent
         self.n_components = self._dispatcher.n_components
         self._analysis_interval_sec = 1.0
+        self.peak_spread_window_bins = peak_spread_window_bins
+        self.variance_multiplier = variance_multiplier
+        self.min_variance_floor = min_variance_floor
         
         # --- Analysis Results ---
         self.vessel_scores = np.zeros(self.n_components)
@@ -631,7 +733,13 @@ class SignalProcessorAgent:
             self._annotations.append(annotation)
 
         # Vessel Speed Tracking
-        self.tracker = VesselStateTracker(drift_threshold_hz=15.0, min_vessel_score=0.45)
+        self.tracker = VesselStateTracker(
+            drift_threshold_hz=15.0, 
+            min_vessel_score=0.45,
+            proximity_threshold_hz=proximity_threshold_hz,
+            association_threshold_hz=association_threshold_hz,
+            consolidation_threshold_hz=consolidation_threshold_hz
+        )
         self.smoothed_centroids = np.zeros(self.n_components)
         self.smoothed_spreads = np.zeros(self.n_components)
 
@@ -647,12 +755,13 @@ class SignalProcessorAgent:
         peaks, _ = find_peaks(H_component, height=max_h * 0.05, prominence=max_h * 0.02)
         
         if len(peaks) > 0:
-            # 1. Isolate the single tallest peak (dominant tonal)
-            tallest_idx = np.argmax(H_component[peaks])
-            dom_peak = peaks[tallest_idx]
+            # Always look at the primary (lowest-frequency) peak first,
+            # even though a higher harmonic peak can have a higher amplitude.
+            dom_peak = peaks[0]
             
-            # 2. Measure spread strictly in a local window of 7 bins around the dominant peak
-            local_window = slice(max(0, dom_peak - 3), min(len(H_component), dom_peak + 4))
+            # 2. Measure spread strictly in a local window of peak_spread_window_bins around the dominant peak
+            half_window = self.peak_spread_window_bins // 2
+            local_window = slice(max(0, dom_peak - half_window), min(len(H_component), dom_peak + half_window + 1))
             local_freqs = freqs[local_window]
             local_weights = H_component[local_window]
             
@@ -869,7 +978,8 @@ class SignalProcessorAgent:
                 duration = end_t - start_t
                 
                 mean_f = state.mean_frequency
-                std_f = np.sqrt(state.total_variance)
+                scaled_variance = max(state.total_variance * self.variance_multiplier, self.min_variance_floor)
+                std_f = np.sqrt(scaled_variance)
                 
                 if meta['is_dominant']:
                     linestyle = "--" if is_active else "-"
@@ -948,7 +1058,7 @@ class SignalProcessorAgent:
                     duration = 0.5
                 
                 mean = state.mean_frequency
-                variance = max(state.total_variance, 4.0)
+                variance = max(state.total_variance * self.variance_multiplier, self.min_variance_floor)
                 
                 # Gaussian kernel peak (normalized to peak height = 1.0)
                 exponent = -0.5 * ((freq_axis - mean) ** 2) / variance

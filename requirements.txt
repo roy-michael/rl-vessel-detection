@@ -1,4 +1,6 @@
 librosa~=0.11.0
 matplotlib~=3.10.9
-numpy
-soundfile
+numpy~=2.4.6
+soundfile~=0.13.1
+scipy~=1.17.1
+scikit-learn~=1.8.0

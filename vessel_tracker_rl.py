@@ -5,30 +5,44 @@ import librosa
 import matplotlib.pyplot as plt
 import numpy as np
 
-from agent import DispatcherAgent, SignalProcessorAgent
-from environment import Environment
+from core.agent import DispatcherAgent, SignalProcessorAgent
+from core.environment import Environment
+
+# Override by setting the RECORDINGS_DIR environment variable
+BASE_DIR = os.environ.get("RECORDINGS_DIR", "c:/Users/Roy/Recordings")
 
 
 async def main():
-    base_dir = "D:/RoyStudies/Recordings"
-    # base_dir = "D:/RoyStudies/Recordings/Garda_2_26/"
-    # base_dir = "D:/RoyStudies/Recordings/AUVExp_1_26/Itamar_AUV"
-    croatia_base_dir = f"{base_dir}/Croatia/Ocean Sonics"
+    croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
     file_dir = f"{croatia_base_dir}/2507_1"
-    # file_dir = f"{base_dir}/2_Deep Water/Electric"
-    # file_dir = f"{base_dir}/Part1_StraightLine/IcListen6695"    #IcListen6692"
-    # file_dir = f"{base_dir}/Part2_Poligon/IcListen6692"    #IcListen6692"
+    
     min_freq = 40
     max_freq = 2000
     n_fft = 16 * 1024
-    hop_length = n_fft // 8 # int(1 * 1024)
+    hop_length = n_fft // 2 # int(1 * 1024)
     window_sec = 15.0
     n_components = 8
+
+    # Parameters for component clustering and variance scaling
+    proximity_threshold_hz = 65.0
+    association_threshold_hz = 80.0
+    peak_spread_window_bins = 15
+    variance_multiplier = 1.5
+    min_variance_floor = 25.0
+    consolidation_threshold_hz = 65.0
 
     try:
         env = Environment(file_dir, min_freq, max_freq, n_fft, hop_length)
         agent = DispatcherAgent(env, min_freq, max_freq, n_fft, n_components, 2000, window_sec)
-        signal_processor = SignalProcessorAgent(agent)
+        signal_processor = SignalProcessorAgent(
+            agent,
+            proximity_threshold_hz=proximity_threshold_hz,
+            association_threshold_hz=association_threshold_hz,
+            peak_spread_window_bins=peak_spread_window_bins,
+            variance_multiplier=variance_multiplier,
+            min_variance_floor=min_variance_floor,
+            consolidation_threshold_hz=consolidation_threshold_hz
+        )
 
     except ValueError as e:
         print(e)
@@ -109,17 +123,19 @@ async def main():
 
         # Save the textual report to a file
         try:
-            with open("vessel_detection_report.txt", "w", encoding="utf-8") as f:
+            output_report_path = os.path.join("output", "vessel_detection_report.txt")
+            with open(output_report_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(report_lines))
-            print("Saved textual report to vessel_detection_report.txt")
+            print(f"Saved textual report to {output_report_path}")
         except Exception as e:
             print(f"Could not save textual report: {e}")
 
         # Save the matplotlib figure to an image
         if agent and hasattr(agent, 'fig') and plt.fignum_exists(agent.fig.number):
             try:
-                agent.fig.savefig("vessel_detection_timeline.png", bbox_inches="tight", dpi=150)
-                print("Saved final graph to vessel_detection_timeline.png")
+                output_img_path = os.path.join("output", "vessel_detection_timeline.png")
+                agent.fig.savefig(output_img_path, bbox_inches="tight", dpi=150)
+                print(f"Saved final graph to {output_img_path}")
             except Exception as e:
                 print(f"Could not save figure image: {e}")
 

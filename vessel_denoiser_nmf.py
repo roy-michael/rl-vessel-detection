@@ -13,10 +13,10 @@ from sklearn.decomposition import NMF
 from sklearn.exceptions import ConvergenceWarning
 
 # --- Configuration Constants ---
-base_dir = "D:/RoyStudies/Recordings"
-croatia_base_dir = f"{base_dir}/Croatia/Ocean Sonics"
+# Override by setting the RECORDINGS_DIR environment variable
+BASE_DIR = os.environ.get("RECORDINGS_DIR", "D:/RoyStudies/Recordings")
+croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
 FILE_DIR = f"{croatia_base_dir}/2507_1"
-# FILE_DIR = "./audio_data"  # Fallback directory if needed
 
 MIN_FREQ = 10  # High-pass threshold to eliminate ocean swell noise
 MAX_FREQ = 2000  # Focus on low-mid frequency vessel harmonics
@@ -217,7 +217,8 @@ class DenoisingDispatcherAgent:
         self.ax_nmf.set_xlabel("Frequency (Hz)")
         self.ax_nmf.set_ylabel('Normalized Scale Factor')
         self.ax_nmf.set_xlim(self._env.freqs_plot[0], self._env.freqs_plot[-1])
-        self.ax_nmf.set_ylim(0, 0.15)
+        self.nmf_ylim_max = 0.15
+        self.ax_nmf.set_ylim(0, self.nmf_ylim_max)
 
         plt.show(block=False)
 
@@ -297,8 +298,16 @@ class DenoisingDispatcherAgent:
         if self._nmf_model is not None:
             H = self._nmf_model.components_
             current_activations = self.activations_buffer[:, -1]
+            max_val = 0.0
             for i, line in enumerate(self.lines_nmf):
-                line.set_ydata(H[i] * current_activations[i])
+                ydata = H[i] * current_activations[i]
+                line.set_ydata(ydata)
+                max_val = max(max_val, np.max(ydata))
+            
+            # Smoothly auto-scale the y-limit with an EMA to avoid visual jumping
+            target_max = max(max_val * 1.15, 0.01)
+            self.nmf_ylim_max = 0.9 * self.nmf_ylim_max + 0.1 * target_max
+            self.ax_nmf.set_ylim(0, self.nmf_ylim_max)
         else:
             for line in self.lines_nmf:
                 line.set_ydata(np.zeros(len(self._env.freqs_plot)))

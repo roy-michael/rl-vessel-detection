@@ -201,3 +201,19 @@ tempCodeRunnerFile.py
 
 # PyPI configuration file
 .pypirc
+
+# =============================================================
+# Project-specific ignores
+# =============================================================
+
+# Generated analysis outputs (all regenerable from source data)
+output/
+
+# Raw data files (large, not for version control)
+*.csv
+
+# Generated plot images
+*.png
+
+# Generated text reports
+*.txt
