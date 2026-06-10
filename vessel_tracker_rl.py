@@ -24,12 +24,12 @@ async def main():
     n_components = 8
 
     # Parameters for component clustering and variance scaling
-    proximity_threshold_hz = 65.0
-    association_threshold_hz = 80.0
+    proximity_threshold_hz = 25.0
+    association_threshold_hz = 30.0
     peak_spread_window_bins = 15
     variance_multiplier = 1.5
     min_variance_floor = 25.0
-    consolidation_threshold_hz = 65.0
+    consolidation_threshold_hz = 25.0
 
     try:
         env = Environment(file_dir, min_freq, max_freq, n_fft, hop_length)
