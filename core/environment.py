@@ -26,7 +26,7 @@ class Environment:
         self.max_freq = max_freq
         self.n_fft = n_fft
         self.hop_length = hop_length
-        self.fft_hop_length = n_fft // 4
+        self.fft_hop_length = hop_length
 
         if not self.wav_files:
             raise ValueError(f"No .wav files found in {self.file_dir}")

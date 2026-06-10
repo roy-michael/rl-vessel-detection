@@ -9,19 +9,23 @@ from scipy.ndimage import median_filter
 from sklearn.decomposition import NMF
 from sklearn.exceptions import ConvergenceWarning
 
+warnings.filterwarnings("ignore", category=ConvergenceWarning)
+
 
 
 class VesselState:
-    def __init__(self, start_time, initial_freq, initial_spread, vessel_id=None):
+    def __init__(self, start_time, initial_freq, initial_spread, initial_amp=0.0, vessel_id=None):
         self.start_time = start_time
         self.end_time = None
         self.frequencies = [initial_freq]
         self.spreads = [initial_spread]
+        self.amplitudes = [initial_amp]
         self.vessel_id = vessel_id
 
-    def add_observation(self, freq, spread):
+    def add_observation(self, freq, spread, amp):
         self.frequencies.append(freq)
         self.spreads.append(spread)
+        self.amplitudes.append(amp)
 
     def close(self, end_time):
         self.end_time = end_time
@@ -86,23 +90,10 @@ class VesselStateTracker:
                 should_merge = False
                 reason = ""
                 
-                # Case 1: Proximity check (same physical vessel split across NMF components)
+                # Proximity check (same physical vessel split across NMF components)
                 if abs(meanA - meanB) <= self.proximity_threshold_hz:
                     should_merge = True
                     reason = f"frequency proximity ({meanB:.1f}Hz vs {meanA:.1f}Hz)"
-                    
-                # Case 2: Harmonic relationship check
-                else:
-                    ratio = meanB / meanA
-                    for k in range(2, 9):
-                        if abs(ratio - k) <= 0.06 * k:
-                            should_merge = True
-                            reason = f"Harmonic {k} relationship ({meanB:.0f}Hz is {k}x of {meanA:.0f}Hz)"
-                            break
-                        if abs(1.0/ratio - k) <= 0.06 * k:
-                            should_merge = True
-                            reason = f"Fundamental relationship ({meanB:.0f}Hz is 1/{k}th of {meanA:.0f}Hz)"
-                            break
                             
                 if should_merge:
                     # Determine which ID to keep (the older one / smaller counter index)
@@ -264,12 +255,14 @@ class VesselStateTracker:
             
             if best_det_idx is not None:
                 det = valid_detections[best_det_idx]
-                active_state.add_observation(det['centroid'], det['spread'])
+                active_state.add_observation(det['centroid'], det['spread'], det['amplitude'])
                 self.last_seen_time[active_state] = current_time
                 matched_detections.add(best_det_idx)
                 matched_active_states.add(active_state)
 
-        # 4. Check for Speed Changes (frequency drift <= 120 Hz OR doubling/halving) for remaining unmatched active states
+        # 4. Check for Speed Changes (frequency drift <= proximity_threshold_hz) for remaining unmatched active states
+        # In case there is a large change in frequency (> proximity_threshold_hz), we do NOT treat it as a speed change
+        # of the same vessel (it will be spawned as a new vessel in Step 7 instead).
         for active_state in active_list:
             if active_state in matched_active_states:
                 continue
@@ -284,29 +277,12 @@ class VesselStateTracker:
                 centroid = det['centroid']
                 mean_f = active_state.mean_frequency
                 
-                # Model the physical expectation of the vessel's speed profiles
                 dist_normal = abs(centroid - mean_f)
-                dist_doubled = abs(centroid - 2.0 * mean_f)
-                dist_halved = abs(centroid - 0.5 * mean_f)
                 
-                best_match_dist = float('inf')
-                is_match = False
-                
-                if dist_normal <= 120.0:
-                    best_match_dist = dist_normal
-                    is_match = True
-                if dist_doubled <= 150.0:  # Allow 150 Hz margin around the doubled frequency
-                    if dist_doubled < best_match_dist:
-                        best_match_dist = dist_doubled
-                        is_match = True
-                if dist_halved <= 80.0:   # Allow 80 Hz margin around halved frequency
-                    if dist_halved < best_match_dist:
-                        best_match_dist = dist_halved
-                        is_match = True
-                        
-                if is_match and best_match_dist < best_freq_diff:
-                    best_freq_diff = best_match_dist
-                    best_det_idx = det_idx
+                if dist_normal <= self.proximity_threshold_hz:
+                    if dist_normal < best_freq_diff:
+                        best_freq_diff = dist_normal
+                        best_det_idx = det_idx
                     
             if best_det_idx is not None:
                 det = valid_detections[best_det_idx]
@@ -314,7 +290,7 @@ class VesselStateTracker:
                 # Close old speed state
                 self.close_state(active_state, current_time)
                 # Start new speed state for the SAME vessel ID
-                new_state = VesselState(current_time, det['centroid'], det['spread'], vessel_id=vessel_id)
+                new_state = VesselState(current_time, det['centroid'], det['spread'], initial_amp=det['amplitude'], vessel_id=vessel_id)
                 self.active_states[new_state] = new_state
                 self.last_seen_time[new_state] = current_time
                 print(f"\n>>> [{current_time:.1f}s] {vessel_id} Changed Speed! New Freq: {det['centroid']:.1f} Hz")
@@ -339,49 +315,13 @@ class VesselStateTracker:
             if best_state is not None:
                 vid = best_state.vessel_id
                 # Re-activate vessel
-                new_state = VesselState(current_time, det['centroid'], det['spread'], vessel_id=vid)
+                new_state = VesselState(current_time, det['centroid'], det['spread'], initial_amp=det['amplitude'], vessel_id=vid)
                 self.active_states[new_state] = new_state
                 self.last_seen_time[new_state] = current_time
                 print(f"\n>>> [{current_time:.1f}s] Re-acquired {vid} at {det['centroid']:.1f} Hz")
                 matched_detections.add(det_idx)
 
-        # 6. Check for Harmonics Association (integer multiples/divisors) with active vessels
-        for det_idx, det in enumerate(valid_detections):
-            if det_idx in matched_detections:
-                continue
-                
-            centroid = det['centroid']
-            matched_vessel_id = None
-            matched_reason = ""
-            
-            for active_state in list(self.active_states.values()):
-                mean_f = active_state.mean_frequency
-                if mean_f == 0 or centroid == 0:
-                    continue
-                    
-                ratio = centroid / mean_f
-                # Check harmonics up to the 8th order
-                for k in range(2, 9):
-                    # det is a harmonic of active_state
-                    if abs(ratio - k) <= 0.06 * k:
-                        matched_vessel_id = active_state.vessel_id
-                        matched_reason = f"Harmonic {k} of fundamental {mean_f:.0f}Hz"
-                        break
-                    # det is the fundamental, active_state is a harmonic
-                    if abs(1.0/ratio - k) <= 0.06 * k:
-                        matched_vessel_id = active_state.vessel_id
-                        matched_reason = f"Fundamental of harmonic {mean_f:.0f}Hz (1/{k}th)"
-                        break
-                        
-                if matched_vessel_id:
-                    break
-                    
-            if matched_vessel_id:
-                new_state = VesselState(current_time, det['centroid'], det['spread'], vessel_id=matched_vessel_id)
-                self.active_states[new_state] = new_state
-                self.last_seen_time[new_state] = current_time
-                print(f"\n>>> [{current_time:.1f}s] Associated Harmonic target with {matched_vessel_id} at {centroid:.1f} Hz ({matched_reason})")
-                matched_detections.add(det_idx)
+
 
         # 7. Spurious new detections -> spawn a new Vessel ID!
         for det_idx, det in enumerate(valid_detections):
@@ -391,7 +331,7 @@ class VesselStateTracker:
             self.vessel_counter += 1
             vid = f"Vessel {self.vessel_counter}"
             
-            new_state = VesselState(current_time, det['centroid'], det['spread'], vessel_id=vid)
+            new_state = VesselState(current_time, det['centroid'], det['spread'], initial_amp=det['amplitude'], vessel_id=vid)
             self.active_states[new_state] = new_state
             self.last_seen_time[new_state] = current_time
             print(f"\n>>> [{current_time:.1f}s] New Vessel Detected! Assigned ID: {vid} at {det['centroid']:.1f} Hz")
@@ -453,10 +393,10 @@ class DispatcherAgent:
     def _setup_plot(self):
         plt.ion()
         
-        self.fig, (self.ax_spec, self.ax_nmf, self.ax_track) = plt.subplots(
-            3, 1, 
-            figsize=(12, 11),
-            gridspec_kw={'height_ratios': [3, 2, 2]}
+        self.fig, (self.ax_spec, self.ax_nmf, self.ax_track, self.ax_amp) = plt.subplots(
+            4, 1, 
+            figsize=(12, 14),
+            gridspec_kw={'height_ratios': [3, 2, 2, 2]}
         )
         self.fig.subplots_adjust(hspace=0.6)
         
@@ -472,6 +412,14 @@ class DispatcherAgent:
         self.ax_kde.set_xlim(0, 1.1)
         self.ax_kde.set_xlabel("Probability Density (KDE)", color="purple")
         self.ax_kde.tick_params(axis='x', colors="purple")
+
+        # Amplitude visualization setup
+        self.ax_amp.set_xlim(0, 15.0)
+        self.ax_amp.set_ylim(0, 1.0)
+        self.ax_amp.set_xlabel("Absolute Time (seconds)")
+        self.ax_amp.set_ylabel("Signal Amplitude (Activation)")
+        self.ax_amp.set_title("Vessel Signal Amplitude Timeline")
+        self.ax_amp.grid(True, linestyle="--", alpha=0.5)
         
         self.xaxis_extent = [-self.window_sec, 0]
 
@@ -511,16 +459,27 @@ class DispatcherAgent:
         return librosa.amplitude_to_db(magnitude_frame, ref=self._env.global_max)
 
     def _transform_nmf_frame(self, frame_data):
-        """Uses the fitted NMF model to predict activations for a single frame."""
+        """Uses the NMF components to project activations for a single frame using fast numpy KL-updates."""
         if self._nmf_model is None:
             return np.zeros((self.n_components, 1), dtype=np.float64)
             
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=ConvergenceWarning)
-            # transform expects shape (n_samples, n_features) -> (1, n_features)
-            # Make sure to convert frame data to float64 to match model components dtype
-            W_frame = self._nmf_model.transform(frame_data.T.astype(np.float64)) 
-            return W_frame.T
+        H = self._nmf_model.components_  # shape (n_components, n_features)
+        x = frame_data.flatten().astype(np.float64)  # shape (n_features,)
+        
+        # Fast numpy multiplicative updates for Kullback-Leibler divergence projection
+        w = np.full(self.n_components, 0.1, dtype=np.float64)
+        eps = 1e-9
+        H_sum = np.sum(H, axis=1)
+        H_sum = np.maximum(H_sum, eps)
+        
+        for _ in range(25):
+            recon = w @ H + eps
+            ratio = x / recon
+            grad = ratio @ H.T
+            w = w * (grad / H_sum)
+            w = np.maximum(w, 0.0)
+            
+        return w.reshape(-1, 1)
 
     async def _background_update_nmf_model(self):
         """Periodically updates the NMF model dictionary (H) from scratch and sorts by frequency."""
@@ -677,11 +636,13 @@ class DispatcherAgent:
             await asyncio.sleep(0)
 
     async def _nmf_analysis_loop(self):
-        while True:
-            if self.frames_observed > self.frames_per_window:
-                await self._background_update_nmf_model()
-            
-            await asyncio.sleep(self.nmf_update_period_sec)
+        last_nmf_update_time = 0.0
+        while not self.completed:
+            if self.current_time - last_nmf_update_time >= self.nmf_update_period_sec:
+                if self.frames_observed > self.frames_per_window:
+                    await self._background_update_nmf_model()
+                last_nmf_update_time = self.current_time
+            await asyncio.sleep(0.01)
 
     async def _plot_update_loop(self):
         while True:
@@ -716,6 +677,7 @@ class SignalProcessorAgent:
         self.feature_scores = {
             'low_freq': np.zeros(self.n_components),
             'mid_freq': np.zeros(self.n_components),
+            'high_freq': np.zeros(self.n_components),
             'tonality': np.zeros(self.n_components),
             'stability': np.zeros(self.n_components),
         }
@@ -783,82 +745,91 @@ class SignalProcessorAgent:
 
     async def _analysis_loop(self):
         """Periodically calculates Vessel Score and peak stats for each component."""
-        while True:
-            nmf_model = self._dispatcher._nmf_model
-            if nmf_model is not None:
-                H = nmf_model.components_
-                W = self._dispatcher.activations_buffer
-                freqs = self._dispatcher._env.freqs_plot
-                
-                low_freq_mask = freqs <= 400
-                mid_freq_mask = (freqs > 400) & (freqs <= 1000)
-                
-                for i in range(self.n_components):
-                    h_i = H[i]
-                    w_i = W[i]
+        last_analysis_time = 0.0
+        while not self._dispatcher.completed:
+            curr_time = self._dispatcher.current_time
+            if curr_time - last_analysis_time >= self._analysis_interval_sec:
+                nmf_model = self._dispatcher._nmf_model
+                if nmf_model is not None:
+                    H = nmf_model.components_
+                    W = self._dispatcher.activations_buffer
+                    freqs = self._dispatcher._env.freqs_plot
                     
-                    # --- Feature Calculation ---
-                    energy_total = np.sum(h_i)
-                    if energy_total == 0: continue
-
-                    low_freq_score = np.sum(h_i[low_freq_mask]) / energy_total
-                    mid_freq_score = np.sum(h_i[mid_freq_mask]) / energy_total
+                    low_freq_mask = freqs <= 400
+                    mid_freq_mask = (freqs > 400) & (freqs <= 1000)
+                    high_freq_mask = (freqs > 1000) & (freqs <= 2000)
                     
-                    amean = np.mean(h_i)
-                    tonality_score = 1.0 - (np.exp(np.mean(np.log(h_i + 1e-9))) / amean) if amean > 0 else 0
-                    
-                    std_of_diffs = np.std(np.diff(w_i))
-                    stability_score = 1.0 / (1.0 + std_of_diffs)
-
-                    # --- Store Feature Scores ---
-                    self.feature_scores['low_freq'][i] = low_freq_score
-                    self.feature_scores['mid_freq'][i] = mid_freq_score
-                    self.feature_scores['tonality'][i] = tonality_score
-                    self.feature_scores['stability'][i] = stability_score
-                    
-                    # --- Final Weighted Vessel Score ---
-                    self.vessel_scores[i] = (low_freq_score * 0.3) + (mid_freq_score * 0.4) + (tonality_score * 0.2) + (stability_score * 0.1)
-                    
-                    # --- Peak Analysis ---
-                    self._analyze_component_peaks(i, h_i, freqs)
-
-                # Track all components that meet the vessel score criteria
-                if len(self.vessel_scores) > 0:
-                    detections = []
                     for i in range(self.n_components):
-                        score = self.vessel_scores[i]
-                        raw_centroid = self.peak_centroids[i]
-                        raw_spread = self.peak_spreads[i]
+                        h_i = H[i]
+                        w_i = W[i]
                         
-                        # Apply exponential moving average (smoothing) to reduce tracking jitter
-                        if raw_centroid > 0:
-                            alpha = 0.25  # Smoothing factor
-                            if self.smoothed_centroids[i] == 0:
-                                self.smoothed_centroids[i] = raw_centroid
-                                self.smoothed_spreads[i] = raw_spread
-                            else:
-                                self.smoothed_centroids[i] = (alpha * raw_centroid) + ((1.0 - alpha) * self.smoothed_centroids[i])
-                                self.smoothed_spreads[i] = (alpha * raw_spread) + ((1.0 - alpha) * self.smoothed_spreads[i])
-                                
-                            centroid = self.smoothed_centroids[i]
-                            spread = self.smoothed_spreads[i]
-                        else:
-                            centroid = 0
-                            spread = 0
+                        # --- Feature Calculation ---
+                        energy_total = np.sum(h_i)
+                        if energy_total == 0: continue
+
+                        low_freq_score = np.sum(h_i[low_freq_mask]) / energy_total
+                        mid_freq_score = np.sum(h_i[mid_freq_mask]) / energy_total
+                        high_freq_score = np.sum(h_i[high_freq_mask]) / energy_total
+                        
+                        amean = np.mean(h_i)
+                        tonality_score = 1.0 - (np.exp(np.mean(np.log(h_i + 1e-9))) / amean) if amean > 0 else 0
+                        
+                        std_of_diffs = np.std(np.diff(w_i))
+                        stability_score = 1.0 / (1.0 + std_of_diffs)
+
+                        # --- Store Feature Scores ---
+                        self.feature_scores['low_freq'][i] = low_freq_score
+                        self.feature_scores['mid_freq'][i] = mid_freq_score
+                        self.feature_scores['high_freq'][i] = high_freq_score
+                        self.feature_scores['tonality'][i] = tonality_score
+                        self.feature_scores['stability'][i] = stability_score
+                        
+                        # --- Final Weighted Vessel Score ---
+                        # Use the max of the three band scores for frequency contribution (scaled by 0.7)
+                        freq_contribution = max(low_freq_score, mid_freq_score, high_freq_score) * 0.7
+                        self.vessel_scores[i] = freq_contribution + (tonality_score * 0.2) + (stability_score * 0.1)
+                        
+                        # --- Peak Analysis ---
+                        self._analyze_component_peaks(i, h_i, freqs)
+
+                    # Track all components that meet the vessel score criteria
+                    if len(self.vessel_scores) > 0:
+                        detections = []
+                        for i in range(self.n_components):
+                            score = self.vessel_scores[i]
+                            raw_centroid = self.peak_centroids[i]
+                            raw_spread = self.peak_spreads[i]
                             
-                        detections.append({
-                            'component_index': i,
-                            'score': score,
-                            'centroid': centroid,
-                            'spread': spread
-                        })
-                    
-                    self.tracker.update_multi(
-                        current_time=self._dispatcher.current_time,
-                        detections=detections
-                    )
-            
-            await asyncio.sleep(self._analysis_interval_sec)
+                            # Apply exponential moving average (smoothing) to reduce tracking jitter
+                            if raw_centroid > 0:
+                                alpha = 0.25  # Smoothing factor
+                                if self.smoothed_centroids[i] == 0:
+                                    self.smoothed_centroids[i] = raw_centroid
+                                    self.smoothed_spreads[i] = raw_spread
+                                else:
+                                    self.smoothed_centroids[i] = (alpha * raw_centroid) + ((1.0 - alpha) * self.smoothed_centroids[i])
+                                    self.smoothed_spreads[i] = (alpha * raw_spread) + ((1.0 - alpha) * self.smoothed_spreads[i])
+                                    
+                                centroid = self.smoothed_centroids[i]
+                                spread = self.smoothed_spreads[i]
+                            else:
+                                centroid = 0
+                                spread = 0
+                                
+                            detections.append({
+                                'component_index': i,
+                                'score': score,
+                                'centroid': centroid,
+                                'spread': spread,
+                                'amplitude': W[i, -1]
+                            })
+                        
+                        self.tracker.update_multi(
+                            current_time=curr_time,
+                            detections=detections
+                        )
+                last_analysis_time = curr_time
+            await asyncio.sleep(0.01)
             
     def _update_annotations(self):
         """Updates plot annotations with scores and peak stats."""
@@ -870,6 +841,7 @@ class SignalProcessorAgent:
             
             lf = self.feature_scores['low_freq'][i]
             mf = self.feature_scores['mid_freq'][i]
+            hf = self.feature_scores['high_freq'][i]
             t = self.feature_scores['tonality'][i]
             s = self.feature_scores['stability'][i]
             
@@ -879,19 +851,21 @@ class SignalProcessorAgent:
             annotation.set_position((x_pos, y_pos))
             annotation.set_text(
                 f'C{i+1}: S={score:.2f} μ={centroid:.0f} σ={spread:.0f}\n'
-                f'L:{lf:.2f} M:{mf:.2f} T:{t:.2f} S:{s:.2f}'
+                f'L:{lf:.2f} M:{mf:.2f} H:{hf:.2f} T:{t:.2f} S:{s:.2f}'
             )
             
             self._dispatcher.lines_nmf[i].set_color(plt.cm.coolwarm(score))
 
     def _update_tracker_plot(self):
-        """Draws the speed timeline and the probability density curve on ax_track and ax_kde."""
+        """Draws the speed timeline, the probability density curve, and the signal amplitude profile."""
         if not hasattr(self._dispatcher, 'ax_track') or not plt.fignum_exists(self._dispatcher.fig.number):
             return
             
-        # 1. Clear both axes
+        # 1. Clear axes
         self._dispatcher.ax_track.clear()
         self._dispatcher.ax_kde.clear()
+        if hasattr(self._dispatcher, 'ax_amp'):
+            self._dispatcher.ax_amp.clear()
 
         # Re-enable grids and limits for ax_track since we cleared it
         self._dispatcher.ax_track.grid(True, linestyle="--", alpha=0.5)
@@ -956,9 +930,24 @@ class SignalProcessorAgent:
                 'states': states
             }
 
+        # Calculate dynamic max amplitude for ax_amp scaling
+        max_amp = 0.1
+        for vid, meta in vessel_metadata.items():
+            for state in meta['states']:
+                if state.amplitudes:
+                    max_amp = max(max_amp, max(state.amplitudes))
+
+        if hasattr(self._dispatcher, 'ax_amp'):
+            self._dispatcher.ax_amp.grid(True, linestyle="--", alpha=0.5)
+            self._dispatcher.ax_amp.set_ylim(0, max_amp * 1.15)
+            self._dispatcher.ax_amp.set_xlabel("Absolute Time (seconds)")
+            self._dispatcher.ax_amp.set_ylabel("Signal Amplitude (Activation)")
+            self._dispatcher.ax_amp.set_title("Vessel Signal Amplitude Timeline")
+
         # 5. Draw each segment and draw connecting transition guidelines
         cmap = plt.cm.get_cmap("tab10")
         labeled_vessels = set()
+        labeled_vessels_amp = set()
         
         total_time = max(15.0, self._dispatcher.current_time)
         # Only label segments that are at least 1.5% of total session time
@@ -966,7 +955,6 @@ class SignalProcessorAgent:
 
         for vid, meta in vessel_metadata.items():
             color = cmap(meta['color_idx'] % 10) if meta['is_dominant'] else "lightgrey"
-            linestyle_segment = "--" if any(s in self.tracker.active_states.values() for s in meta['states']) else "-"
             
             # Sort segments of this vessel chronologically to draw transitions
             sorted_segs = sorted(meta['states'], key=lambda s: s.start_time)
@@ -981,6 +969,8 @@ class SignalProcessorAgent:
                 mean_f = state.mean_frequency
                 scaled_variance = max(state.total_variance * self.variance_multiplier, self.min_variance_floor)
                 std_f = np.sqrt(scaled_variance)
+                
+                t_seg = np.linspace(start_t, end_t, len(state.amplitudes)) if len(state.amplitudes) > 1 else np.array([start_t])
                 
                 if meta['is_dominant']:
                     linestyle = "--" if is_active else "-"
@@ -1007,6 +997,16 @@ class SignalProcessorAgent:
                         label=legend_label
                     )
                     
+                    # Plot amplitude line on ax_amp
+                    if hasattr(self._dispatcher, 'ax_amp'):
+                        legend_label_amp = vessel_label if vessel_label not in labeled_vessels_amp else ""
+                        labeled_vessels_amp.add(vessel_label)
+                        self._dispatcher.ax_amp.plot(
+                            t_seg, state.amplitudes,
+                            color=color, linestyle=linestyle, linewidth=2.0, alpha=alpha_val,
+                            label=legend_label_amp
+                        )
+                    
                     # Draw text label only on long, stable segments to prevent overlap clutter
                     if duration >= label_threshold_sec:
                         self._dispatcher.ax_track.text(
@@ -1022,6 +1022,12 @@ class SignalProcessorAgent:
                         [start_t, end_t], [mean_f, mean_f], 
                         color=color, linestyle="-", linewidth=1.0, alpha=0.25
                     )
+                    # Plot minor amplitude line on ax_amp
+                    if hasattr(self._dispatcher, 'ax_amp'):
+                        self._dispatcher.ax_amp.plot(
+                            t_seg, state.amplitudes,
+                            color=color, linestyle="-", linewidth=1.0, alpha=0.25
+                        )
 
             # Draw dotted transition guidelines strictly between dominant vessel segments
             if meta['is_dominant'] and len(sorted_segs) > 1:
@@ -1041,10 +1047,24 @@ class SignalProcessorAgent:
                         color=color, linestyle=":", linewidth=2.0, alpha=0.7
                     )
 
+                    # Connect amplitude transition guide
+                    if hasattr(self._dispatcher, 'ax_amp'):
+                        ampA = segA.amplitudes[-1] if segA.amplitudes else 0.0
+                        ampB = segB.amplitudes[0] if segB.amplitudes else 0.0
+                        self._dispatcher.ax_amp.plot(
+                            [endA_t, startB_t], [ampA, ampB],
+                            color=color, linestyle=":", linewidth=2.0, alpha=0.7
+                        )
+
         # Set x limits on timeline to absolute time
         self._dispatcher.ax_track.set_xlim(0, max(15.0, self._dispatcher.current_time))
+        if hasattr(self._dispatcher, 'ax_amp'):
+            self._dispatcher.ax_amp.set_xlim(0, max(15.0, self._dispatcher.current_time))
+
         if all_states:
             self._dispatcher.ax_track.legend(loc="upper left", fontsize=8)
+            if hasattr(self._dispatcher, 'ax_amp') and labeled_vessels_amp:
+                self._dispatcher.ax_amp.legend(loc="upper left", fontsize=8)
 
         # 6. Draw the probability density curve on ax_kde
         freq_axis = self._dispatcher._env.freqs_plot
