@@ -138,7 +138,8 @@ class VesselStateTracker:
     def consolidate_all_vessels(self, current_time):
         """
         Consolidates different Vessel IDs together across all completed and active states
-        if their overall weighted mean frequencies are within consolidation_threshold_hz.
+        if their overall weighted mean frequencies are within consolidation_threshold_hz
+        OR if they exhibit a harmonic relationship (using a frequency-drift tolerant threshold).
         """
         active_list = list(self.active_states.values())
         all_states = self.states + active_list
@@ -172,7 +173,7 @@ class VesselStateTracker:
             
             vessel_means[vid] = weighted_freq_sum / total_duration
 
-        # 3. Compare all pairs and merge if they are close
+        # 3. Compare all pairs and merge if they are close OR if they are harmonics
         vessels = list(vessel_means.keys())
         n = len(vessels)
         merged_any = False
@@ -185,7 +186,29 @@ class VesselStateTracker:
                 meanA = vessel_means[vidA]
                 meanB = vessel_means[vidB]
                 
+                should_merge = False
+                reason = ""
+                
                 if abs(meanA - meanB) <= self.consolidation_threshold_hz:
+                    should_merge = True
+                    reason = f"close cumulative means (diff: {abs(meanA - meanB):.1f}Hz)"
+                else:
+                    if meanA > 0 and meanB > 0:
+                        ratio = meanB / meanA
+                        # Check harmonic relationships with a tolerance of 10% (0.10 * k)
+                        for k in range(2, 9):
+                            # vidB is a harmonic of vidA fundamental
+                            if abs(ratio - k) <= 0.10 * k:
+                                should_merge = True
+                                reason = f"Harmonic {k} relationship (~{meanB:.0f}Hz is {k}x of fundamental ~{meanA:.0f}Hz)"
+                                break
+                            # vidB is fundamental of vidA harmonic
+                            if abs(1.0/ratio - k) <= 0.10 * k:
+                                should_merge = True
+                                reason = f"Fundamental relationship (~{meanB:.0f}Hz is 1/{k}th of harmonic ~{meanA:.0f}Hz)"
+                                break
+                
+                if should_merge:
                     # Determine which ID to keep (older one, i.e., lower index number)
                     try:
                         numA = int(vidA.split()[-1])
@@ -209,7 +232,7 @@ class VesselStateTracker:
                             s.vessel_id = keep_id
                             merge_count += 1
 
-                    print(f"\n>>> [{current_time:.1f}s] CONSOLIDATED: Merged {discard_id} (~{meanB:.1f}Hz) into {keep_id} (~{meanA:.1f}Hz) due to close cumulative means (diff: {abs(meanA - meanB):.1f}Hz)")
+                    print(f"\n>>> [{current_time:.1f}s] CONSOLIDATED: Merged {discard_id} into {keep_id} due to {reason}")
                     merged_any = True
                     break
             if merged_any:
