@@ -9,26 +9,36 @@ from core.agent import DispatcherAgent, SignalProcessorAgent
 from core.environment import Environment
 
 # Override by setting the RECORDINGS_DIR environment variable
-BASE_DIR = os.environ.get("RECORDINGS_DIR", "c:/Users/Roy/Recordings")
+BASE_DIR = os.environ.get("RECORDINGS_DIR", "D:/RoyStudies/Recordings")
 
 
 async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Run RL Vessel Tracker")
-    parser.add_argument("--dataset", type=str, choices=["croatia", "scooter"], default="croatia", help="Dataset to run on")
+    parser.add_argument("--dataset", type=str, choices=["croatia", "croatia_2507_2", "scooter"], default="croatia", help="Dataset to run on")
+    parser.add_argument("--rl-agent", type=str, choices=["q_learning", "sarsa"], default="q_learning", help="RL agent policy to use")
+    parser.add_argument("--policy-dataset", type=str, choices=["croatia", "croatia_2507_2", "scooter"], default="croatia", help="Dataset the policy was trained on")
+    parser.add_argument("--max-files", type=int, default=None, help="Maximum number of files to process")
+    parser.add_argument("--headless", action="store_true", help="Run without graphical display")
     args = parser.parse_args()
 
     if args.dataset == "scooter":
-        file_dir = f"{BASE_DIR}/scooter"
-        report_filename = "scooter_vessel_detection_report.txt"
-        img_filename = "scooter_vessel_detection_timeline.png"
+        file_dir = f"{BASE_DIR}/DepartmentalCruise-2025-06-12/icListen/wav"
+        report_filename = f"scooter_{args.rl_agent}_vessel_detection_report.txt"
+        img_filename = f"scooter_{args.rl_agent}_vessel_detection_timeline.png"
+        min_freq = 400
+    elif args.dataset == "croatia_2507_2":
+        croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
+        file_dir = f"{croatia_base_dir}/2507_2"
+        report_filename = f"croatia_2507_2_{args.rl_agent}_report.txt"
+        img_filename = f"croatia_2507_2_{args.rl_agent}_timeline.png"
+        min_freq = 40
     else:
         croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
         file_dir = f"{croatia_base_dir}/2507_1"
-        report_filename = "vessel_detection_report.txt"
-        img_filename = "vessel_detection_timeline.png"
-
-    min_freq = 40
+        report_filename = f"croatia_2507_1_{args.rl_agent}_report.txt"
+        img_filename = f"croatia_2507_1_{args.rl_agent}_timeline.png"
+        min_freq = 40
     max_freq = 2000
     n_fft = 16 * 1024
     hop_length = n_fft // 2 # int(1 * 1024)
@@ -44,8 +54,8 @@ async def main():
     consolidation_threshold_hz = 25.0
 
     try:
-        env = Environment(file_dir, min_freq, max_freq, n_fft, hop_length)
-        agent = DispatcherAgent(env, min_freq, max_freq, n_fft, n_components, 2000, window_sec)
+        env = Environment(file_dir, min_freq, max_freq, n_fft, hop_length, max_files=args.max_files)
+        agent = DispatcherAgent(env, min_freq, max_freq, n_fft, n_components, 2000, window_sec, headless=args.headless)
         signal_processor = SignalProcessorAgent(
             agent,
             proximity_threshold_hz=proximity_threshold_hz,
@@ -55,6 +65,31 @@ async def main():
             min_variance_floor=min_variance_floor,
             consolidation_threshold_hz=consolidation_threshold_hz
         )
+        
+        # Load and integrate trained RL policy
+        from core.rl_agent import QLearningAgent, SarsaAgent
+        from core.rl_env import VesselTrackingRLEnv
+        
+        policy_path = f"output/rl_{args.rl_agent}_{args.policy_dataset}.json"
+        if os.path.exists(policy_path):
+            if args.rl_agent == "q_learning":
+                q_agent = QLearningAgent(epsilon=0.0)  # No exploration in evaluation
+            else:
+                q_agent = SarsaAgent(epsilon=0.0)
+            q_agent.load_policy(policy_path)
+            rl_env = VesselTrackingRLEnv(signal_processor.tracker)
+            
+            signal_processor.tracker.q_agent = q_agent
+            signal_processor.tracker.rl_env = rl_env
+            signal_processor.tracker.rl_epsilon = 0.0
+            signal_processor.tracker.rl_stats = {
+                'total_reward': 0.0,
+                'action_counts': {0: 0, 1: 0, 2: 0},
+                'status_counts': {}
+            }
+            print(f"Successfully integrated trained {args.rl_agent} tracking policy (trained on {args.policy_dataset}).")
+        else:
+            print(f"Warning: Trained {args.rl_agent} policy (trained on {args.policy_dataset}) not found at {policy_path}. Falling back to heuristic tracking rules.")
 
     except ValueError as e:
         print(e)
@@ -145,6 +180,19 @@ async def main():
                     log(f"    Total Variance: {state.total_variance:.1f} Hz^2 (Std Dev: {np.sqrt(state.total_variance):.1f} Hz)")
                 log("-" * 55)
         log("="*70 + "\n")
+
+        # If running in RL mode, log the RL stats
+        if getattr(signal_processor.tracker, 'rl_stats', None) is not None:
+            rl_stats = signal_processor.tracker.rl_stats
+            log("="*70)
+            log("                 REINFORCEMENT LEARNING EVALUATION METRICS")
+            log("="*70)
+            log(f"  RL Policy:           {args.rl_agent} (trained on {args.policy_dataset})")
+            log(f"  Cumulative Reward:   {rl_stats['total_reward']:.1f}")
+            action_counts = rl_stats['action_counts']
+            log(f"  Actions Taken:       Reject (A0): {action_counts.get(0, 0)}, Associate (A1): {action_counts.get(1, 0)}, Spawn (A2): {action_counts.get(2, 0)}")
+            log(f"  Outcome Statuses:    {dict(rl_stats['status_counts'])}")
+            log("="*70 + "\n")
 
         # Save the textual report to a file
         try:
@@ -240,7 +288,7 @@ async def main():
                 ax_sim.set_title(f"Simulated Spectrogram (Tracked Vessel Signals Only) - {args.dataset.upper()}", fontsize=13, fontweight="bold")
                 ax_sim.grid(True, linestyle="--", alpha=0.3)
                 
-                sim_spectrogram_filename = f"{args.dataset}_simulated_spectrogram.png"
+                sim_spectrogram_filename = f"croatia_2507_1_{args.rl_agent}_simulated_spectrogram.png" if args.dataset == "croatia" else f"{args.dataset}_{args.rl_agent}_simulated_spectrogram.png"
                 sim_spectrogram_path = os.path.join("output", sim_spectrogram_filename)
                 fig_sim.savefig(sim_spectrogram_path, bbox_inches="tight", dpi=150)
                 plt.close(fig_sim)

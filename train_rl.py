@@ -1,0 +1,183 @@
+import os
+import asyncio
+import numpy as np
+
+from core.environment import Environment
+from core.agent import DispatcherAgent, SignalProcessorAgent
+from core.rl_env import VesselTrackingRLEnv
+from core.rl_agent import QLearningAgent, SarsaAgent
+
+# Default dataset directory
+BASE_DIR = os.environ.get("RECORDINGS_DIR", "D:/RoyStudies/Recordings")
+croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
+FILE_DIR = f"{croatia_base_dir}/2507_1"
+POLICY_FILE = "output/rl_q_table.json"
+
+async def train_one_episode(episode_idx, q_agent, epsilon, dataset):
+    """Runs a single training episode (one pass over the WAV files in the directory)."""
+    max_freq = 2000
+    n_fft = 16 * 1024
+    hop_length = n_fft // 2
+    window_sec = 15.0
+    n_components = 8
+
+    # Parameters for component clustering and variance scaling
+    proximity_threshold_hz = 25.0
+    association_threshold_hz = 30.0
+    peak_spread_window_bins = 15
+    variance_multiplier = 1.5
+    min_variance_floor = 25.0
+    consolidation_threshold_hz = 25.0
+
+    if dataset == "scooter":
+        file_dir = f"{BASE_DIR}/DepartmentalCruise-2025-06-12/icListen/wav"
+        min_freq = 400
+    elif dataset == "croatia_2507_2":
+        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2507_2"
+        min_freq = 40
+    else:
+        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2507_1"
+        min_freq = 40
+
+    env = Environment(file_dir, min_freq, max_freq, n_fft, hop_length, max_files=3)
+    
+    # We initialize DispatcherAgent in headless mode
+    dispatcher = DispatcherAgent(env, min_freq, max_freq, n_fft, n_components, 200, window_sec, headless=True)
+    signal_processor = SignalProcessorAgent(
+        dispatcher,
+        proximity_threshold_hz=proximity_threshold_hz,
+        association_threshold_hz=association_threshold_hz,
+        peak_spread_window_bins=peak_spread_window_bins,
+        variance_multiplier=variance_multiplier,
+        min_variance_floor=min_variance_floor,
+        consolidation_threshold_hz=consolidation_threshold_hz
+    )
+
+    # Initialize RL environment wrapper
+    rl_env = VesselTrackingRLEnv(signal_processor.tracker)
+
+    await env.start()
+    
+    # Wait for buffer to have something
+    first_frame, _ = await env.peek()
+    if first_frame is None:
+        print("  [Train Error] No audio data available in environment.")
+        return 0.0, {}
+
+    # Start agents
+    await dispatcher.start()
+    await signal_processor.start()
+
+    # Track learning stats
+    total_reward = 0.0
+    action_counts = {0: 0, 1: 0, 2: 0}
+    status_counts = {}
+
+    # We run the frame-by-frame loop manually or hook it into the tracker updates.
+    # To run training, we intercept the update_multi call or run our own loop.
+    # To keep code changes minimal, we can modify the tracker inside SignalProcessorAgent
+    # to support an RL agent policy. If a Q-learning agent is provided, it will use that,
+    # otherwise it will fall back to its heuristic rules.
+    # Let's assign our q_agent and rl_env to the signal_processor's tracker!
+    signal_processor.tracker.q_agent = q_agent
+    signal_processor.tracker.rl_env = rl_env
+    signal_processor.tracker.rl_epsilon = epsilon
+    signal_processor.tracker.rl_stats = {
+        'total_reward': 0.0,
+        'action_counts': action_counts,
+        'status_counts': status_counts
+    }
+
+    # Run until dispatcher is completed
+    try:
+        while not dispatcher.completed:
+            await asyncio.sleep(0.1)
+    except asyncio.CancelledError:
+        pass
+
+    # Clean up tasks if any
+    return signal_processor.tracker.rl_stats
+
+async def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Train RL Tracking Agent")
+    parser.add_argument("--agent", type=str, choices=["q_learning", "sarsa"], default="q_learning", help="Agent type to train")
+    parser.add_argument("--dataset", type=str, choices=["croatia", "croatia_2507_2", "scooter"], default="croatia", help="Dataset to train on")
+    args = parser.parse_args()
+
+    if not os.path.exists("output"):
+        os.makedirs("output")
+
+    policy_file = f"output/rl_{args.agent}_{args.dataset}.json"
+    agent_title = "Q-LEARNING" if args.agent == "q_learning" else "SARSA (TD-based)"
+
+    if args.dataset == "scooter":
+        file_dir = f"{BASE_DIR}/DepartmentalCruise-2025-06-12/icListen/wav"
+    elif args.dataset == "croatia_2507_2":
+        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2507_2"
+    else:
+        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2507_1"
+
+    print("======================================================================")
+    print(f"          STARTING {agent_title} VESSEL TRACKING TRAINING PIPELINE")
+    print("======================================================================\n")
+    print(f"Data Source: {file_dir}")
+
+    # Hyperparameters
+    num_episodes = 12
+    initial_epsilon = 0.4
+    min_epsilon = 0.05
+    alpha = 0.15
+    gamma = 0.85
+
+    if args.agent == "q_learning":
+        q_agent = QLearningAgent(alpha=alpha, gamma=gamma, epsilon=initial_epsilon)
+    else:
+        q_agent = SarsaAgent(alpha=alpha, gamma=gamma, epsilon=initial_epsilon)
+
+    # If an existing policy file exists, we can bootstrap/load it
+    if os.path.exists(policy_file):
+        try:
+            q_agent.load_policy(policy_file)
+            print("Successfully bootstrapped from existing policy file.\n")
+        except Exception as e:
+            print(f"Could not load existing policy: {e}. Starting fresh.\n")
+
+    for ep in range(num_episodes):
+        # Linear epsilon decay
+        epsilon = max(min_epsilon, initial_epsilon - (initial_epsilon - min_epsilon) * (ep / (num_episodes - 1)))
+        print(f"--- Episode {ep+1}/{num_episodes} (Epsilon: {epsilon:.3f}) ---")
+        
+        stats = await train_one_episode(ep, q_agent, epsilon, args.dataset)
+        
+        # Display episode results
+        action_str = ", ".join(f"A{a}: {count}" for a, count in stats.get('action_counts', {}).items())
+        print(f"  Episode {ep+1} Completed | Cumulative Reward: {stats.get('total_reward', 0.0):.1f}")
+        print(f"  Actions Taken: {action_str}")
+        print(f"  Outcome Statuses: {dict(stats.get('status_counts', {}))}")
+        print("-" * 50)
+
+    # Save final policy
+    q_agent.save_policy(policy_file)
+
+    # Print learned state-value summaries
+    print("\n======================================================================")
+    print("                  TRAINED STATE-VALUE FUNCTION DIAGNOSTICS")
+    print("======================================================================")
+    print("State Representation: (Distance Bin, Amplitude Bin, Tonality Bin)")
+    print("Bins: Dist: 0=Close, 1=Med, 2=Far, 3=Out | Amp/Tonal: 0=Low, 1=Med, 2=High\n")
+    print(f"{'State (D,A,T)':<15} | {'V(s) Value':<12} | {'Optimal Action':<15} | {'Q-values [A0, A1, A2]':<25}")
+    print("-" * 75)
+    
+    # Sort states for readable diagnostics
+    for state in sorted(q_agent.q_table.keys()):
+        q_vals = q_agent.q_table[state]
+        v_s = q_agent.get_value(state)
+        opt_act = q_agent.get_best_action(state)
+        opt_act_str = "REJECT (Noise)" if opt_act == 0 else "ASSOCIATE" if opt_act == 1 else "SPAWN (New)"
+        q_vals_str = "[" + ", ".join(f"{q:.2f}" for q in q_vals) + "]"
+        print(f"{str(state):<15} | {v_s:<12.2f} | {opt_act_str:<15} | {q_vals_str:<25}")
+    print("======================================================================\n")
+
+if __name__ == "__main__":
+    asyncio.run(main())

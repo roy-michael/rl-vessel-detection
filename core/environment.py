@@ -18,10 +18,13 @@ class Environment:
                  max_freq=2000,
                  n_fft=32 * 1024,
                  hop_length=1024,
-                 max_buffered_sec=120):
+                 max_buffered_sec=120,
+                 max_files=None):
 
         self.file_dir = file_dir
         self.wav_files = sorted(glob.glob(os.path.join(file_dir, "*.wav")))
+        if max_files is not None:
+            self.wav_files = self.wav_files[:max_files]
         self.min_freq = min_freq
         self.max_freq = max_freq
         self.n_fft = n_fft
