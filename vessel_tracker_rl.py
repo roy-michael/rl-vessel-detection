@@ -15,9 +15,15 @@ BASE_DIR = os.environ.get("RECORDINGS_DIR", "D:/RoyStudies/Recordings")
 async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Run RL Vessel Tracker")
-    parser.add_argument("--dataset", type=str, choices=["croatia", "croatia_2507_2", "scooter"], default="croatia", help="Dataset to run on")
-    parser.add_argument("--rl-agent", type=str, choices=["q_learning", "sarsa"], default="q_learning", help="RL agent policy to use")
-    parser.add_argument("--policy-dataset", type=str, choices=["croatia", "croatia_2507_2", "scooter"], default="croatia", help="Dataset the policy was trained on")
+    parser.add_argument("--dataset", type=str,
+                        choices=["croatia", "croatia_2507_2", "croatia_2407_1", "croatia_2407_2", "croatia_2307", "scooter"],
+                        default="croatia", help="Dataset to run on")
+    parser.add_argument("--rl-agent", type=str,
+                        choices=["q_learning", "sarsa", "double_q_learning", "linear_fa", "dyna_q"],
+                        default="q_learning", help="RL agent policy to use")
+    parser.add_argument("--policy-dataset", type=str,
+                        choices=["croatia", "croatia_2507_2", "croatia_2407_1", "croatia_2407_2", "croatia_2307", "scooter"],
+                        default="croatia", help="Dataset the policy was trained on")
     parser.add_argument("--max-files", type=int, default=None, help="Maximum number of files to process")
     parser.add_argument("--headless", action="store_true", help="Run without graphical display")
     args = parser.parse_args()
@@ -32,6 +38,24 @@ async def main():
         file_dir = f"{croatia_base_dir}/2507_2"
         report_filename = f"croatia_2507_2_{args.rl_agent}_report.txt"
         img_filename = f"croatia_2507_2_{args.rl_agent}_timeline.png"
+        min_freq = 40
+    elif args.dataset == "croatia_2407_1":
+        croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
+        file_dir = f"{croatia_base_dir}/2407_1"
+        report_filename = f"croatia_2407_1_{args.rl_agent}_report.txt"
+        img_filename = f"croatia_2407_1_{args.rl_agent}_timeline.png"
+        min_freq = 40
+    elif args.dataset == "croatia_2407_2":
+        croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
+        file_dir = f"{croatia_base_dir}/2407_2"
+        report_filename = f"croatia_2407_2_{args.rl_agent}_report.txt"
+        img_filename = f"croatia_2407_2_{args.rl_agent}_timeline.png"
+        min_freq = 40
+    elif args.dataset == "croatia_2307":
+        croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
+        file_dir = f"{croatia_base_dir}/2307"
+        report_filename = f"croatia_2307_{args.rl_agent}_report.txt"
+        img_filename = f"croatia_2307_{args.rl_agent}_timeline.png"
         min_freq = 40
     else:
         croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
@@ -55,27 +79,41 @@ async def main():
 
     try:
         env = Environment(file_dir, min_freq, max_freq, n_fft, hop_length, max_files=args.max_files)
-        agent = DispatcherAgent(env, min_freq, max_freq, n_fft, n_components, 2000, window_sec, headless=args.headless)
-        signal_processor = SignalProcessorAgent(
-            agent,
+        agent = DispatcherAgent(
+            env, min_freq, max_freq, n_fft, n_components, 2000, window_sec, headless=args.headless,
             proximity_threshold_hz=proximity_threshold_hz,
             association_threshold_hz=association_threshold_hz,
             peak_spread_window_bins=peak_spread_window_bins,
             variance_multiplier=variance_multiplier,
             min_variance_floor=min_variance_floor,
-            consolidation_threshold_hz=consolidation_threshold_hz
+            consolidation_threshold_hz=consolidation_threshold_hz,
+            min_duration_sec=45.0,
+            min_vessel_score=0.50
         )
+        signal_processor = agent
         
         # Load and integrate trained RL policy
-        from core.rl_agent import QLearningAgent, SarsaAgent
+        from core.rl_agent import QLearningAgent, SarsaAgent, DoubleQLearningAgent, LinearFAAgent, DynaQAgent
         from core.rl_env import VesselTrackingRLEnv
         
-        policy_path = f"output/rl_{args.rl_agent}_{args.policy_dataset}.json"
+        _linear_fa = (args.rl_agent == "linear_fa")
+        policy_path = (
+            f"output/rl_{args.rl_agent}_{args.policy_dataset}.npy" if _linear_fa
+            else f"output/rl_{args.rl_agent}_{args.policy_dataset}.json"
+        )
         if os.path.exists(policy_path):
             if args.rl_agent == "q_learning":
-                q_agent = QLearningAgent(epsilon=0.0)  # No exploration in evaluation
-            else:
+                q_agent = QLearningAgent(epsilon=0.0)
+            elif args.rl_agent == "sarsa":
                 q_agent = SarsaAgent(epsilon=0.0)
+            elif args.rl_agent == "double_q_learning":
+                q_agent = DoubleQLearningAgent(epsilon=0.0)
+            elif args.rl_agent == "linear_fa":
+                q_agent = LinearFAAgent(epsilon=0.0)
+            elif args.rl_agent == "dyna_q":
+                q_agent = DynaQAgent(epsilon=0.0)
+            else:
+                raise ValueError(f"Unknown rl_agent: {args.rl_agent}")
             q_agent.load_policy(policy_path)
             rl_env = VesselTrackingRLEnv(signal_processor.tracker)
             
@@ -105,7 +143,6 @@ async def main():
          
     # Start the agent, which will now handle the plotting and observation loop
     await agent.start()
-    await signal_processor.start()
     
     # Keep the main thread alive while the agent runs
     # In a real UI application, this would be replaced by the UI event loop
@@ -123,6 +160,10 @@ async def main():
         log("\n" + "="*70)
         log("                 FINAL VESSEL DETECTION & SPEED REPORT")
         log("="*70)
+        
+        # Run final consolidation to merge any remaining states at the end of the run
+        signal_processor.tracker.consolidate_all_vessels()
+        
         states = list(signal_processor.tracker.states)
         active_states = [
             s for s in signal_processor.tracker.active_states.values()
@@ -145,10 +186,27 @@ async def main():
             vessel_durations = []
             for vid, segs in vessel_history.items():
                 total_duration = sum((s.end_time or agent.current_time) - s.start_time for s in segs)
-                vessel_durations.append((vid, total_duration, segs))
+                if total_duration >= 180.0:
+                    vessel_durations.append((vid, total_duration, segs))
                 
             # Sort so dominant vessels are printed at the top
             vessel_durations.sort(key=lambda x: x[1], reverse=True)
+            
+            # Print a high-level summary table at the top of the report to make all vessels visible
+            log("\n" + "="*70)
+            log("                 HIGH-LEVEL DOMINANT TARGETS SUMMARY")
+            log("="*70)
+            log(f"{'Vessel ID':<15} | {'Type/Status':<16} | {'Active Time Window':<19} | {'Total Duration':<14} | {'Mean Freq (Hz)':<14}")
+            log("-" * 88)
+            for rank, (vid, dur, segs) in enumerate(vessel_durations):
+                is_dominant = (rank < 8)
+                status = "DOMINANT TARGET" if is_dominant else "BACKGROUND NOISE"
+                segs_sorted = sorted(segs, key=lambda s: s.start_time)
+                min_start = min(s.start_time for s in segs_sorted)
+                max_end = max((s.end_time or agent.current_time) for s in segs_sorted)
+                mean_freq = np.mean([s.mean_frequency for s in segs_sorted])
+                log(f"{vid:<15} | {status:<16} | {min_start:.1f}s - {max_end:.1f}s | {dur:.1f}s | {mean_freq:.1f} Hz")
+            log("="*70 + "\n")
             
             for rank, (vid, dur, segs) in enumerate(vessel_durations):
                 is_dominant = (rank < 8)  # top 8 are dominant
@@ -203,34 +261,55 @@ async def main():
         except Exception as e:
             print(f"Could not save textual report: {e}")
 
-        # Force a final tracker plot update to capture all observations
-        if signal_processor and agent and hasattr(agent, 'fig') and plt.fignum_exists(agent.fig.number):
-            signal_processor._update_annotations()
-            try:
+        # Force a final tracker plot update or recreate it offline for headless runs
+        try:
+            output_img_path = os.path.join("output", img_filename)
+            if agent and hasattr(agent, 'fig') and plt.fignum_exists(agent.fig.number):
+                signal_processor._update_annotations()
                 signal_processor._update_tracker_plot()
-            except Exception as e:
-                print(f"Could not perform final plot update: {e}")
-
-        # Save the matplotlib figure to an image
-        if agent and hasattr(agent, 'fig') and plt.fignum_exists(agent.fig.number):
-            try:
-                output_img_path = os.path.join("output", img_filename)
                 agent.fig.savefig(output_img_path, bbox_inches="tight", dpi=150)
                 print(f"Saved final graph to {output_img_path}")
-            except Exception as e:
-                print(f"Could not save figure image: {e}")
+            elif agent:
+                print("Generating and saving final vessel timeline plot...")
+                fig_new, ax_new = plt.subplots(figsize=(12, 6))
+                agent.fig = fig_new
+                agent.ax_track = ax_new
+                agent.ax_kde = ax_new.twiny()
+                agent._update_tracker_plot()
+                fig_new.savefig(output_img_path, bbox_inches="tight", dpi=150)
+                plt.close(fig_new)
+                print(f"Saved final graph to {output_img_path}")
+        except Exception as e:
+            print(f"Could not save final graph: {e}")
 
         # Generate and save a simulated spectrogram of only the tracked signals
         if all_states:
             try:
                 print("Generating simulated spectrogram...")
                 max_time = agent.current_time
+                
+                # Filter states to only include those belonging to stable vessels (duration threshold)
+                # to eliminate transient noise and false alarm lines
+                vessel_history = {}
+                for state in all_states:
+                    vid = state.vessel_id if state.vessel_id else "Noise"
+                    if vid not in vessel_history:
+                        vessel_history[vid] = []
+                    vessel_history[vid].append(state)
+                
+                valid_states = []
+                min_track_dur = 300.0 if max_time > 600 else 180.0
+                for vid, segs in vessel_history.items():
+                    total_dur = sum((s.end_time or max_time) - s.start_time for s in segs)
+                    if total_dur >= min_track_dur:
+                        valid_states.extend(segs)
+
                 dt = 0.5
                 t_grid = np.arange(0, max_time, dt)
                 f_grid = np.linspace(min_freq, max_freq, 800)
                 spec_grid = np.zeros((len(f_grid), len(t_grid)))
                 
-                for state in all_states:
+                for state in valid_states:
                     start_t = state.start_time
                     end_t = state.end_time or max_time
                     
@@ -262,7 +341,8 @@ async def main():
                         seg_ts_idx = np.where(seg_ts == t_val)[0][0]
                         f_t = interp_freqs[seg_ts_idx]
                         amp_t = interp_amps[seg_ts_idx]
-                        spread_t = max(5.0, interp_spreads[seg_ts_idx])
+                        # Use a fixed narrow spread to render sharp, clear, consistent tonal lines
+                        spread_t = 8.0
                         
                         # Add Gaussian peak to the frequency column
                         gaussian_profile = np.exp(-0.5 * ((f_grid - f_t) / spread_t) ** 2)
@@ -288,7 +368,14 @@ async def main():
                 ax_sim.set_title(f"Simulated Spectrogram (Tracked Vessel Signals Only) - {args.dataset.upper()}", fontsize=13, fontweight="bold")
                 ax_sim.grid(True, linestyle="--", alpha=0.3)
                 
-                sim_spectrogram_filename = f"croatia_2507_1_{args.rl_agent}_simulated_spectrogram.png" if args.dataset == "croatia" else f"{args.dataset}_{args.rl_agent}_simulated_spectrogram.png"
+                _ds_prefix = {
+                    "croatia":         "croatia_2507_1",
+                    "croatia_2507_2":  "croatia_2507_2",
+                    "croatia_2407_1":  "croatia_2407_1",
+                    "croatia_2407_2":  "croatia_2407_2",
+                    "scooter":         "scooter",
+                }.get(args.dataset, args.dataset)
+                sim_spectrogram_filename = f"{_ds_prefix}_{args.rl_agent}_simulated_spectrogram.png"
                 sim_spectrogram_path = os.path.join("output", sim_spectrogram_filename)
                 fig_sim.savefig(sim_spectrogram_path, bbox_inches="tight", dpi=150)
                 plt.close(fig_sim)

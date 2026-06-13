@@ -67,8 +67,12 @@ class Environment:
             file_path = self.wav_files[self.file_index]
 
             try:
-                # Load the entire audio file into memory
-                y, _ = await asyncio.to_thread(librosa.load, file_path, sr=self.sr, mono=True)
+                # Load the entire audio file into memory using fast soundfile read
+                data, _ = await asyncio.to_thread(sf.read, file_path, dtype='float32')
+                if len(data.shape) > 1:
+                    y = np.mean(data, axis=1)
+                else:
+                    y = data
                 # Perform STFT on the whole file
                 fft = librosa.stft(y, n_fft=self.n_fft, hop_length=self.fft_hop_length)
 

@@ -68,6 +68,26 @@ class VesselTrackingRLEnv:
 
         return self.discretize_state(min_dist, amplitude, score)
 
+    def get_continuous_state(self, detection):
+        """
+        Returns a raw continuous state tuple (min_dist_hz, amplitude, score)
+        for use with the LinearFAAgent. Does NOT discretise.
+        Existing get_state() is untouched and still used by all tabular agents.
+        """
+        centroid = detection['centroid']
+        amplitude = float(detection.get('amplitude', 0.0))
+        score = float(detection.get('score', 0.0))
+
+        if centroid <= 0:
+            return (999.0, amplitude, score)
+
+        active_list = list(self.tracker.active_states.values())
+        if not active_list:
+            return (999.0, amplitude, score)
+
+        min_dist = min(abs(centroid - s.mean_frequency) for s in active_list)
+        return (float(min_dist), amplitude, score)
+
     def step(self, action, detection, current_time):
         """
         Executes the chosen action for a detection at the given time.

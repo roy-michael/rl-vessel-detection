@@ -102,7 +102,7 @@ class VesselStateTracker:
                     # Harmonic check of fundamentals (integer multiples check)
                     f1 = min(fundA, fundB)
                     f2 = max(fundA, fundB)
-                    if f1 > 10.0:
+                    if 10.0 < f1 <= 150.0 and f2 <= 500.0:
                         ratio = f2 / f1
                         k = round(ratio)
                         if 2 <= k <= 8:
@@ -147,86 +147,88 @@ class VesselStateTracker:
         Consolidates different Vessel IDs together across all completed and active states
         if their fundamental frequencies are within consolidation_threshold_hz
         OR if they exhibit a harmonic relationship (using a frequency-drift tolerant threshold).
+        Runs iteratively until no more merges are possible.
         """
-        active_list = list(self.active_states.values())
-        all_states = self.states + active_list
-        if not all_states:
-            return
+        while True:
+            active_list = list(self.active_states.values())
+            all_states = self.states + active_list
+            if not all_states:
+                break
 
-        # 1. Group states by Vessel ID
-        vessel_groups = {}
-        for state in all_states:
-            vid = state.vessel_id
-            if not vid or vid == "Noise":
-                continue
-            if vid not in vessel_groups:
-                vessel_groups[vid] = []
-            vessel_groups[vid].append(state)
+            # 1. Group states by Vessel ID
+            vessel_groups = {}
+            for state in all_states:
+                vid = state.vessel_id
+                if not vid or vid == "Noise":
+                    continue
+                vessel_groups.setdefault(vid, []).append(state)
 
-        if len(vessel_groups) < 2:
-            return
+            if len(vessel_groups) < 2:
+                break
 
-        # 2. Calculate fundamental frequency (minimum stage frequency) for each Vessel ID
-        vessel_fundamentals = {}
-        for vid, states in vessel_groups.items():
-            # The fundamental frequency is the lowest frequency line tracked for this vessel
-            vessel_fundamentals[vid] = min(s.mean_frequency for s in states)
+            # 2. Calculate fundamental frequency (minimum stage frequency) for each Vessel ID
+            vessel_fundamentals = {}
+            for vid, states in vessel_groups.items():
+                vessel_fundamentals[vid] = min(s.mean_frequency for s in states)
 
-        # 3. Compare all pairs and merge if they are close or harmonic
-        vessels = list(vessel_fundamentals.keys())
-        n = len(vessels)
-        merged_any = False
+            # 3. Compare all pairs and merge if they are close or harmonic
+            vessels = list(vessel_fundamentals.keys())
+            n = len(vessels)
+            merged_this_iteration = False
 
-        for i in range(n):
-            for j in range(i + 1, n):
-                vidA = vessels[i]
-                vidB = vessels[j]
-                
-                fundA = vessel_fundamentals[vidA]
-                fundB = vessel_fundamentals[vidB]
-                
-                is_harmonic = False
-                harmonic_reason = ""
-                f1 = min(fundA, fundB)
-                f2 = max(fundA, fundB)
-                if f1 > 10.0:
-                    ratio = f2 / f1
-                    k = round(ratio)
-                    if 2 <= k <= 8:
-                        expected_f = k * f1
-                        if abs(f2 - expected_f) <= self.consolidation_threshold_hz:
-                            is_harmonic = True
-                            harmonic_reason = f"harmonic relationship of fundamentals (k={k}, {f2:.1f}Hz is harmonic of fundamental {f1:.1f}Hz)"
-
-                if abs(fundA - fundB) <= self.consolidation_threshold_hz or is_harmonic:
-                    # Determine which ID to keep (older one, i.e., lower index number)
-                    try:
-                        numA = int(vidA.split()[-1])
-                        numB = int(vidB.split()[-1])
-                        keep_id = vidA if numA < numB else vidB
-                        discard_id = vidB if numA < numB else vidA
-                    except Exception:
-                        keep_id = vidA
-                        discard_id = vidB
+            for i in range(n):
+                for j in range(i + 1, n):
+                    vidA = vessels[i]
+                    vidB = vessels[j]
                     
-                    # Rename all states in self.states
-                    merge_count = 0
-                    for s in self.states:
-                        if s.vessel_id == discard_id:
-                            s.vessel_id = keep_id
-                            merge_count += 1
-                            
-                    # Rename active states
-                    for s in self.active_states.values():
-                        if s.vessel_id == discard_id:
-                            s.vessel_id = keep_id
-                            merge_count += 1
+                    fundA = vessel_fundamentals[vidA]
+                    fundB = vessel_fundamentals[vidB]
+                    
+                    is_harmonic = False
+                    harmonic_reason = ""
+                    f1 = min(fundA, fundB)
+                    f2 = max(fundA, fundB)
+                    if 10.0 < f1 <= 150.0 and f2 <= 500.0:
+                        ratio = f2 / f1
+                        k = round(ratio)
+                        if 2 <= k <= 8:
+                            expected_f = k * f1
+                            if abs(f2 - expected_f) <= self.consolidation_threshold_hz:
+                                is_harmonic = True
+                                harmonic_reason = f"harmonic relationship of fundamentals (k={k}, {f2:.1f}Hz is harmonic of fundamental {f1:.1f}Hz)"
 
-                    reason = f"close fundamentals (diff: {abs(fundA - fundB):.1f}Hz)" if not is_harmonic else harmonic_reason
-                    print(f"\n>>> [{current_time:.1f}s] CONSOLIDATED: Merged {discard_id} (fund ~{fundB:.1f}Hz) into {keep_id} (fund ~{fundA:.1f}Hz) due to {reason}")
-                    merged_any = True
+                    if abs(fundA - fundB) <= self.consolidation_threshold_hz or is_harmonic:
+                        # Determine which ID to keep (older one, i.e., lower index number)
+                        try:
+                            numA = int(vidA.split()[-1])
+                            numB = int(vidB.split()[-1])
+                            keep_id = vidA if numA < numB else vidB
+                            discard_id = vidB if numA < numB else vidA
+                        except Exception:
+                            keep_id = vidA
+                            discard_id = vidB
+                        
+                        # Rename all states in self.states
+                        merge_count = 0
+                        for s in self.states:
+                            if s.vessel_id == discard_id:
+                                s.vessel_id = keep_id
+                                merge_count += 1
+                                
+                        # Rename active states
+                        for s in self.active_states.values():
+                            if s.vessel_id == discard_id:
+                                s.vessel_id = keep_id
+                                merge_count += 1
+
+                        reason = f"close fundamentals (diff: {abs(fundA - fundB):.1f}Hz)" if not is_harmonic else harmonic_reason
+                        print(f"\n>>> [{current_time:.1f}s] CONSOLIDATED: Merged {discard_id} (fund ~{fundB:.1f}Hz) into {keep_id} (fund ~{fundA:.1f}Hz) due to {reason}")
+                        merged_this_iteration = True
+                        break
+                if merged_this_iteration:
                     break
-            if merged_any:
+            
+            if not merged_this_iteration:
                 break
 
     def update_multi(self, current_time, detections):
@@ -259,11 +261,21 @@ class VesselStateTracker:
 
         # RL-based matching/decision loop!
         if getattr(self, 'q_agent', None) is not None:
+            # Detect whether the agent uses continuous states (LinearFAAgent)
+            from core.rl_agent import LinearFAAgent as _LinearFAAgent
+            _uses_continuous = isinstance(self.q_agent, _LinearFAAgent)
+
             for det in valid_detections:
-                state = self.rl_env.get_state(det)
+                if _uses_continuous:
+                    state = self.rl_env.get_continuous_state(det)
+                else:
+                    state = self.rl_env.get_state(det)
                 action = self.q_agent.get_action(state, epsilon=self.rl_epsilon)
                 reward, step_info = self.rl_env.step(action, det, current_time)
-                next_state = self.rl_env.get_state(det)
+                if _uses_continuous:
+                    next_state = self.rl_env.get_continuous_state(det)
+                else:
+                    next_state = self.rl_env.get_state(det)
                 
                 if self.rl_epsilon > 0.0:
                     sig = inspect.signature(self.q_agent.learn)

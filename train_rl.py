@@ -5,7 +5,7 @@ import numpy as np
 from core.environment import Environment
 from core.agent import DispatcherAgent, SignalProcessorAgent
 from core.rl_env import VesselTrackingRLEnv
-from core.rl_agent import QLearningAgent, SarsaAgent
+from core.rl_agent import QLearningAgent, SarsaAgent, DoubleQLearningAgent, LinearFAAgent, DynaQAgent
 
 # Default dataset directory
 BASE_DIR = os.environ.get("RECORDINGS_DIR", "D:/RoyStudies/Recordings")
@@ -41,17 +41,19 @@ async def train_one_episode(episode_idx, q_agent, epsilon, dataset):
 
     env = Environment(file_dir, min_freq, max_freq, n_fft, hop_length, max_files=3)
     
-    # We initialize DispatcherAgent in headless mode
-    dispatcher = DispatcherAgent(env, min_freq, max_freq, n_fft, n_components, 200, window_sec, headless=True)
-    signal_processor = SignalProcessorAgent(
-        dispatcher,
+    # We initialize DispatcherAgent in headless mode with threshold parameters
+    dispatcher = DispatcherAgent(
+        env, min_freq, max_freq, n_fft, n_components, 200, window_sec, headless=True,
         proximity_threshold_hz=proximity_threshold_hz,
         association_threshold_hz=association_threshold_hz,
         peak_spread_window_bins=peak_spread_window_bins,
         variance_multiplier=variance_multiplier,
         min_variance_floor=min_variance_floor,
-        consolidation_threshold_hz=consolidation_threshold_hz
+        consolidation_threshold_hz=consolidation_threshold_hz,
+        min_duration_sec=45.0,
+        min_vessel_score=0.50
     )
+    signal_processor = dispatcher
 
     # Initialize RL environment wrapper
     rl_env = VesselTrackingRLEnv(signal_processor.tracker)
@@ -66,7 +68,6 @@ async def train_one_episode(episode_idx, q_agent, epsilon, dataset):
 
     # Start agents
     await dispatcher.start()
-    await signal_processor.start()
 
     # Track learning stats
     total_reward = 0.0
@@ -101,20 +102,41 @@ async def train_one_episode(episode_idx, q_agent, epsilon, dataset):
 async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Train RL Tracking Agent")
-    parser.add_argument("--agent", type=str, choices=["q_learning", "sarsa"], default="q_learning", help="Agent type to train")
-    parser.add_argument("--dataset", type=str, choices=["croatia", "croatia_2507_2", "scooter"], default="croatia", help="Dataset to train on")
+    parser.add_argument("--agent", type=str,
+                        choices=["q_learning", "sarsa", "double_q_learning", "linear_fa", "dyna_q"],
+                        default="q_learning", help="Agent type to train")
+    parser.add_argument("--dataset", type=str,
+                        choices=["croatia", "croatia_2507_2", "croatia_2407_1", "croatia_2407_2", "croatia_2307", "scooter"],
+                        default="croatia", help="Dataset to train on")
     args = parser.parse_args()
 
     if not os.path.exists("output"):
         os.makedirs("output")
 
-    policy_file = f"output/rl_{args.agent}_{args.dataset}.json"
-    agent_title = "Q-LEARNING" if args.agent == "q_learning" else "SARSA (TD-based)"
+    _linear_fa = (args.agent == "linear_fa")
+    policy_file = (
+        f"output/rl_{args.agent}_{args.dataset}.npy" if _linear_fa
+        else f"output/rl_{args.agent}_{args.dataset}.json"
+    )
+    agent_titles = {
+        "q_learning": "Q-LEARNING",
+        "sarsa": "SARSA (TD-based)",
+        "double_q_learning": "DOUBLE Q-LEARNING",
+        "linear_fa": "LINEAR FUNCTION APPROXIMATION (Tile Coding)",
+        "dyna_q": "DYNA-Q (Planning + Model)",
+    }
+    agent_title = agent_titles.get(args.agent, args.agent.upper())
 
     if args.dataset == "scooter":
         file_dir = f"{BASE_DIR}/DepartmentalCruise-2025-06-12/icListen/wav"
     elif args.dataset == "croatia_2507_2":
         file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2507_2"
+    elif args.dataset == "croatia_2407_1":
+        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2407_1"
+    elif args.dataset == "croatia_2407_2":
+        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2407_2"
+    elif args.dataset == "croatia_2307":
+        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2307"
     else:
         file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2507_1"
 
@@ -124,7 +146,7 @@ async def main():
     print(f"Data Source: {file_dir}")
 
     # Hyperparameters
-    num_episodes = 12
+    num_episodes = 3
     initial_epsilon = 0.4
     min_epsilon = 0.05
     alpha = 0.15
@@ -132,8 +154,16 @@ async def main():
 
     if args.agent == "q_learning":
         q_agent = QLearningAgent(alpha=alpha, gamma=gamma, epsilon=initial_epsilon)
-    else:
+    elif args.agent == "sarsa":
         q_agent = SarsaAgent(alpha=alpha, gamma=gamma, epsilon=initial_epsilon)
+    elif args.agent == "double_q_learning":
+        q_agent = DoubleQLearningAgent(alpha=alpha, gamma=gamma, epsilon=initial_epsilon)
+    elif args.agent == "linear_fa":
+        q_agent = LinearFAAgent(alpha=0.01, gamma=gamma, epsilon=initial_epsilon)
+    elif args.agent == "dyna_q":
+        q_agent = DynaQAgent(alpha=alpha, gamma=gamma, epsilon=initial_epsilon, n_planning=20)
+    else:
+        raise ValueError(f"Unknown agent type: {args.agent}")
 
     # If an existing policy file exists, we can bootstrap/load it
     if os.path.exists(policy_file):

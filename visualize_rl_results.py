@@ -38,16 +38,18 @@ async def run_simulation_and_collect_tracks(dataset, rl_agent_name, policy_datas
     consolidation_threshold_hz = 25.0
 
     env = Environment(file_dir, min_freq, max_freq, n_fft, hop_length, max_files=max_files)
-    dispatcher = DispatcherAgent(env, min_freq, max_freq, n_fft, n_components, 2000, window_sec, headless=True)
-    signal_processor = SignalProcessorAgent(
-        dispatcher,
+    dispatcher = DispatcherAgent(
+        env, min_freq, max_freq, n_fft, n_components, 2000, window_sec, headless=True,
         proximity_threshold_hz=proximity_threshold_hz,
         association_threshold_hz=association_threshold_hz,
         peak_spread_window_bins=peak_spread_window_bins,
         variance_multiplier=variance_multiplier,
         min_variance_floor=min_variance_floor,
-        consolidation_threshold_hz=consolidation_threshold_hz
+        consolidation_threshold_hz=consolidation_threshold_hz,
+        min_duration_sec=45.0,
+        min_vessel_score=0.50
     )
+    signal_processor = dispatcher
 
     # Load policy if exists
     policy_path = f"output/rl_{rl_agent_name}_{policy_dataset}.json"
@@ -85,10 +87,12 @@ async def run_simulation_and_collect_tracks(dataset, rl_agent_name, policy_datas
 
     await env.start()
     await dispatcher.start()
-    await signal_processor.start()
 
     while not dispatcher.completed:
         await asyncio.sleep(0.05)
+
+    # Run final consolidation to merge any remaining states at the end of the run
+    signal_processor.tracker.consolidate_all_vessels()
 
     # Collect final tracked states
     states = list(signal_processor.tracker.states)
@@ -106,34 +110,59 @@ def plot_tracking_process(ax, states, raw_detections, max_time, title, min_freq)
     """
     # Plot raw NMF peak detections as background noise representation
     if raw_detections:
-        times = [d[0] for d in raw_detections]
-        freqs = [d[1] for d in raw_detections]
-        ax.scatter(times, freqs, c='gray', s=3, alpha=0.15, label='Raw Detections')
+        # For long timelines, filter and downsample raw detections to avoid heavy clutter
+        if max_time > 600:
+            filtered_dets = [d for d in raw_detections if len(d) > 3 and d[3] >= 0.8]
+            downsampled_dets = filtered_dets[::25]
+            if downsampled_dets:
+                times = [d[0] for d in downsampled_dets]
+                freqs = [d[1] for d in downsampled_dets]
+                ax.scatter(times, freqs, c='gray', s=1.0, alpha=0.03, label='Raw Detections (Sparse/Tonal)')
+        else:
+            times = [d[0] for d in raw_detections]
+            freqs = [d[1] for d in raw_detections]
+            ax.scatter(times, freqs, c='gray', s=3, alpha=0.15, label='Raw Detections')
 
-    # Plot final vessel trajectories
-    # Sort states by duration to color dominant vessels cleanly
-    states_sorted = sorted(states, key=lambda s: (s.end_time or max_time) - s.start_time, reverse=True)
-    
-    labeled_count = 0
-    for idx, state in enumerate(states_sorted):
-        duration = (state.end_time or max_time) - state.start_time
-        if duration < 10.0:
-            continue  # Ignore transient/short noise states in plot
-            
-        color = plt.cm.tab10(labeled_count % 10)
-        t_points = np.linspace(state.start_time, state.end_time or max_time, len(state.frequencies))
+    # Group states by vessel_id
+    vessel_groups = {}
+    for state in states:
+        vid = state.vessel_id if state.vessel_id else "Noise"
+        if vid not in vessel_groups:
+            vessel_groups[vid] = []
+        vessel_groups[vid].append(state)
+
+    # Compute cumulative durations and filter
+    vessel_durations = []
+    # Dynamic duration threshold: 300s for long runs to avoid transient clutter, 180s for short runs
+    min_track_dur = 300.0 if max_time > 600 else 180.0
+    for vid, segs in vessel_groups.items():
+        total_duration = sum((s.end_time or max_time) - s.start_time for s in segs)
+        if total_duration >= min_track_dur:
+            vessel_durations.append((vid, total_duration, segs))
+
+    # Sort vessels by duration descending
+    vessel_durations.sort(key=lambda x: x[1], reverse=True)
+
+    for rank, (vessel_id, total_dur, segs) in enumerate(vessel_durations):
+        color = plt.cm.tab10(rank % 10)
         
-        # Plot trajectory line and markers
-        ax.plot(t_points, state.frequencies, color=color, linewidth=2.0, alpha=0.85)
-        ax.scatter(t_points, state.frequencies, color=color, s=8, alpha=0.85, edgecolors='none')
+        # Sort segments chronologically
+        segs_sorted = sorted(segs, key=lambda s: s.start_time)
+        
+        for state in segs_sorted:
+            t_points = np.linspace(state.start_time, state.end_time or max_time, len(state.frequencies))
+            
+            # Plot trajectory line and markers
+            ax.plot(t_points, state.frequencies, color=color, linewidth=2.0, alpha=0.85)
+            ax.scatter(t_points, state.frequencies, color=color, s=8, alpha=0.85, edgecolors='none')
 
-        # Add text label at the end of the line for dominant vessels
-        if duration >= 15.0 and labeled_count < 5:
-            # Place label slightly offset to the right of the last point
-            ax.text(t_points[-1] + 1.5, state.frequencies[-1], state.vessel_id, 
+        # Add text label at the end of the last segment for dominant vessels
+        if rank < 5 and segs_sorted:
+            last_seg = segs_sorted[-1]
+            t_last = last_seg.end_time or max_time
+            ax.text(t_last + 1.5, last_seg.frequencies[-1], vessel_id, 
                     color=color, fontsize=7, fontweight='bold', 
                     verticalalignment='center', bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1))
-            labeled_count += 1
 
     ax.set_title(title, fontsize=10, fontweight='bold')
     ax.set_xlabel("Time (seconds)", fontsize=8)
@@ -157,10 +186,10 @@ async def main():
     # Define simulation cases
     # (row, col, agent, dataset, policy_dataset, max_files, title)
     cases = [
-        (0, 0, "q_learning", "croatia_2507_2", "croatia_2507_2", 5, "A. Q-Learning: Croatia 2507_2 (Training)"),
-        (0, 1, "q_learning", "croatia", "croatia_2507_2", 5, "B. Q-Learning Verification: Croatia 2507_1 (Verification)"),
-        (1, 0, "sarsa", "croatia_2507_2", "croatia_2507_2", 5, "C. SARSA: Croatia 2507_2 (Training)"),
-        (1, 1, "sarsa", "croatia", "croatia_2507_2", 5, "D. SARSA Verification: Croatia 2507_1 (Verification)"),
+        (0, 0, "q_learning", "croatia_2507_2", "croatia_2507_2", None, "A. Q-Learning: Croatia 2507_2 (Training)"),
+        (0, 1, "q_learning", "croatia", "croatia_2507_2", None, "B. Q-Learning Verification: Croatia 2507_1 (Verification)"),
+        (1, 0, "sarsa", "croatia_2507_2", "croatia_2507_2", None, "C. SARSA: Croatia 2507_2 (Training)"),
+        (1, 1, "sarsa", "croatia", "croatia_2507_2", None, "D. SARSA Verification: Croatia 2507_1 (Verification)"),
     ]
 
     for row, col, agent, dataset, policy_dataset, max_files, title in cases:
