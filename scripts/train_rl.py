@@ -4,7 +4,8 @@ import numpy as np
 
 from core.environment import Environment, VesselTrackingRLEnv
 from core.agent import DispatcherAgent, SignalProcessorAgent
-from core.agent import QLearningAgent, SarsaAgent, DoubleQLearningAgent, LinearFAAgent, DynaQAgent
+from core.agent.rl_agent import RLAgent
+from core.agent.policy import QLearningPolicy, SarsaPolicy, DoubleQLearningPolicy, LinearFAPolicy, DynaQPolicy
 
 # Default dataset directory
 BASE_DIR = os.environ.get("RECORDINGS_DIR", "D:/RoyStudies/Recordings")
@@ -12,7 +13,7 @@ croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
 FILE_DIR = f"{croatia_base_dir}/2507_1"
 POLICY_FILE = "output/rl_q_table.json"
 
-async def train_one_episode(episode_idx, q_agent, epsilon, dataset):
+async def train_one_episode(episode_idx, rl_agent, epsilon, dataset):
     """Runs a single training episode (one pass over the WAV files in the directory)."""
     max_freq = 4000
     n_fft = 16 * 1024
@@ -78,8 +79,8 @@ async def train_one_episode(episode_idx, q_agent, epsilon, dataset):
     # To keep code changes minimal, we can modify the tracker inside SignalProcessorAgent
     # to support an RL agent policy. If a Q-learning agent is provided, it will use that,
     # otherwise it will fall back to its heuristic rules.
-    # Let's assign our q_agent and rl_env to the signal_processor's tracker!
-    signal_processor.tracker.q_agent = q_agent
+    # Let's assign our rl_agent and rl_env to the signal_processor's tracker!
+    signal_processor.tracker.rl_agent = rl_agent
     signal_processor.tracker.rl_env = rl_env
     signal_processor.tracker.rl_epsilon = epsilon
     signal_processor.tracker.rl_stats = {
@@ -160,22 +161,24 @@ async def main():
     gamma = 0.85
 
     if args.agent == "q_learning":
-        q_agent = QLearningAgent(alpha=alpha, gamma=gamma, epsilon=initial_epsilon)
+        policy = QLearningPolicy(alpha=alpha, gamma=gamma)
     elif args.agent == "sarsa":
-        q_agent = SarsaAgent(alpha=alpha, gamma=gamma, epsilon=initial_epsilon)
+        policy = SarsaPolicy(alpha=alpha, gamma=gamma)
     elif args.agent == "double_q_learning":
-        q_agent = DoubleQLearningAgent(alpha=alpha, gamma=gamma, epsilon=initial_epsilon)
+        policy = DoubleQLearningPolicy(alpha=alpha, gamma=gamma)
     elif args.agent == "linear_fa":
-        q_agent = LinearFAAgent(alpha=0.01, gamma=gamma, epsilon=initial_epsilon)
+        policy = LinearFAPolicy(alpha=0.01, gamma=gamma)
     elif args.agent == "dyna_q":
-        q_agent = DynaQAgent(alpha=alpha, gamma=gamma, epsilon=initial_epsilon, n_planning=20)
+        policy = DynaQPolicy(alpha=alpha, gamma=gamma, n_planning=20)
     else:
         raise ValueError(f"Unknown agent type: {args.agent}")
+
+    rl_agent = RLAgent(policy=policy, epsilon=initial_epsilon)
 
     # If an existing policy file exists, we can bootstrap/load it
     if os.path.exists(policy_file):
         try:
-            q_agent.load_policy(policy_file)
+            rl_agent.load_policy(policy_file)
             print("Successfully bootstrapped from existing policy file.\n")
         except Exception as e:
             print(f"Could not load existing policy: {e}. Starting fresh.\n")
@@ -185,7 +188,7 @@ async def main():
         epsilon = max(min_epsilon, initial_epsilon - (initial_epsilon - min_epsilon) * (ep / (num_episodes - 1)))
         print(f"--- Episode {ep+1}/{num_episodes} (Epsilon: {epsilon:.3f}) ---")
         
-        stats = await train_one_episode(ep, q_agent, epsilon, args.dataset)
+        stats = await train_one_episode(ep, rl_agent, epsilon, args.dataset)
         
         # Display episode results
         action_str = ", ".join(f"A{a}: {count}" for a, count in stats.get('action_counts', {}).items())
@@ -195,7 +198,7 @@ async def main():
         print("-" * 50)
 
     # Save final policy
-    q_agent.save_policy(policy_file)
+    rl_agent.save_policy(policy_file)
 
     # Print learned state-value summaries
     print("\n======================================================================")
@@ -207,10 +210,10 @@ async def main():
     print("-" * 75)
     
     # Sort states for readable diagnostics
-    for state in sorted(q_agent.q_table.keys()):
-        q_vals = q_agent.q_table[state]
-        v_s = q_agent.get_value(state)
-        opt_act = q_agent.get_best_action(state)
+    for state in sorted(rl_agent.q_table.keys()):
+        q_vals = rl_agent.q_table[state]
+        v_s = rl_agent.get_value(state)
+        opt_act = rl_agent.get_best_action(state)
         opt_act_str = "REJECT (Noise)" if opt_act == 0 else "ASSOCIATE" if opt_act == 1 else "SPAWN (New)"
         q_vals_str = "[" + ", ".join(f"{q:.2f}" for q in q_vals) + "]"
         print(f"{str(state):<15} | {v_s:<12.2f} | {opt_act_str:<15} | {q_vals_str:<25}")

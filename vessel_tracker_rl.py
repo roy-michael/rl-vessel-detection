@@ -105,7 +105,8 @@ async def main():
         signal_processor = agent
         
         # Load and integrate trained RL policy
-        from core.agent import QLearningAgent, SarsaAgent, DoubleQLearningAgent, LinearFAAgent, DynaQAgent
+        from core.agent.rl_agent import RLAgent
+        from core.agent.policy import QLearningPolicy, SarsaPolicy, DoubleQLearningPolicy, LinearFAPolicy, DynaQPolicy
         
         _linear_fa = (args.rl_agent == "linear_fa")
         policy_dir = {
@@ -122,21 +123,23 @@ async def main():
         )
         if os.path.exists(policy_path):
             if args.rl_agent == "q_learning":
-                q_agent = QLearningAgent(epsilon=0.0)
+                policy = QLearningPolicy()
             elif args.rl_agent == "sarsa":
-                q_agent = SarsaAgent(epsilon=0.0)
+                policy = SarsaPolicy()
             elif args.rl_agent == "double_q_learning":
-                q_agent = DoubleQLearningAgent(epsilon=0.0)
+                policy = DoubleQLearningPolicy()
             elif args.rl_agent == "linear_fa":
-                q_agent = LinearFAAgent(epsilon=0.0)
+                policy = LinearFAPolicy()
             elif args.rl_agent == "dyna_q":
-                q_agent = DynaQAgent(epsilon=0.0)
+                policy = DynaQPolicy()
             else:
                 raise ValueError(f"Unknown rl_agent: {args.rl_agent}")
-            q_agent.load_policy(policy_path)
+            
+            rl_agent = RLAgent(policy=policy, epsilon=0.0)
+            rl_agent.load_policy(policy_path)
             rl_env = VesselTrackingRLEnv(signal_processor.tracker)
             
-            signal_processor.tracker.q_agent = q_agent
+            signal_processor.tracker.rl_agent = rl_agent
             signal_processor.tracker.rl_env = rl_env
             signal_processor.tracker.rl_epsilon = 0.0
             signal_processor.tracker.rl_stats = {

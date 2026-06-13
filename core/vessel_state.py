@@ -44,7 +44,7 @@ class VesselStateTracker:
         self.vessel_counter = 0
 
         # RL policy attributes
-        self.q_agent = None
+        self.rl_agent = None
         self.rl_env = None
         self.rl_epsilon = 0.0
         self.rl_stats = None
@@ -246,7 +246,7 @@ class VesselStateTracker:
             if current_time - self.last_seen_time[active_state] > timeout_limit:
                 states_to_close.append(active_state)
         for state in states_to_close:
-            if not getattr(self, 'q_agent', None):
+            if not getattr(self, 'rl_agent', None):
                 print(f"\n>>> [{current_time:.1f}s] Active state for {state.vessel_id} at {state.mean_frequency:.1f}Hz timed out.")
             self.close_state(state, current_time)
 
@@ -260,30 +260,14 @@ class VesselStateTracker:
             return
 
         # RL-based matching/decision loop!
-        if getattr(self, 'q_agent', None) is not None:
-            # Detect whether the agent uses continuous states (LinearFAAgent)
-            from core.agent import LinearFAAgent as _LinearFAAgent
-            _uses_continuous = isinstance(self.q_agent, _LinearFAAgent)
-
+        if getattr(self, 'rl_agent', None) is not None:
             for det in valid_detections:
-                if _uses_continuous:
-                    state = self.rl_env.get_continuous_state(det)
-                else:
-                    state = self.rl_env.get_state(det)
-                action = self.q_agent.get_action(state, epsilon=self.rl_epsilon)
+                state = self.rl_agent.observe(det, self.rl_env)
+                action = self.rl_agent.act(state)
                 reward, step_info = self.rl_env.step(action, det, current_time)
-                if _uses_continuous:
-                    next_state = self.rl_env.get_continuous_state(det)
-                else:
-                    next_state = self.rl_env.get_state(det)
+                next_state = self.rl_agent.observe(det, self.rl_env)
                 
-                if self.rl_epsilon > 0.0:
-                    sig = inspect.signature(self.q_agent.learn)
-                    if 'next_action' in sig.parameters:
-                        next_action = self.q_agent.get_action(next_state, epsilon=self.rl_epsilon)
-                        self.q_agent.learn(state, action, reward, next_state, next_action)
-                    else:
-                        self.q_agent.learn(state, action, reward, next_state)
+                self.rl_agent.step(state, action, reward, next_state)
                     
                 if self.rl_stats is not None:
                     self.rl_stats['total_reward'] += reward

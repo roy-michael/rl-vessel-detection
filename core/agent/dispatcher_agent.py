@@ -135,7 +135,7 @@ class DispatcherAgent:
         self.tracker = self
 
         # RL policy attributes
-        self.q_agent = None
+        self.rl_agent = None
         self.rl_env = None
         self.rl_epsilon = 0.0
         self.rl_stats = None
@@ -349,7 +349,7 @@ class DispatcherAgent:
             self.peak_centroids[component_index] = 0
             self.peak_spreads[component_index] = 0
             return
-
+ 
         peaks, _ = find_peaks(H_component, height=max_h * 0.05, prominence=max_h * 0.02)
         
         if len(peaks) > 0:
@@ -562,7 +562,7 @@ class DispatcherAgent:
         duration = state.end_time - state.start_time
         if duration >= self.min_duration_sec:
             self.states.append(state)
-            if not self.q_agent or self.rl_epsilon <= 0.05:
+            if not self.rl_agent or self.rl_epsilon <= 0.05:
                 print(f">>> [STORED SPEED STATE] {state.vessel_id} | Mean Freq: {state.mean_frequency:.1f} Hz | "
                       f"Interval: {state.start_time:.1f}s - {state.end_time:.1f}s (Duration: {duration:.1f}s)")
 
@@ -590,20 +590,14 @@ class DispatcherAgent:
             return
 
         # RL-based matching/decision loop
-        if self.q_agent is not None:
+        if self.rl_agent is not None:
             for det in valid_detections:
-                state = self.rl_env.get_state(det)
-                action = self.q_agent.get_action(state, epsilon=self.rl_epsilon)
+                state = self.rl_agent.observe(det, self.rl_env)
+                action = self.rl_agent.act(state)
                 reward, step_info = self.rl_env.step(action, det, current_time)
-                next_state = self.rl_env.get_state(det)
+                next_state = self.rl_agent.observe(det, self.rl_env)
                 
-                if self.rl_epsilon > 0.0:
-                    sig = inspect.signature(self.q_agent.learn)
-                    if 'next_action' in sig.parameters:
-                        next_action = self.q_agent.get_action(next_state, epsilon=self.rl_epsilon)
-                        self.q_agent.learn(state, action, reward, next_state, next_action)
-                    else:
-                        self.q_agent.learn(state, action, reward, next_state)
+                self.rl_agent.step(state, action, reward, next_state)
                     
                 if self.rl_stats is not None:
                     self.rl_stats['total_reward'] += reward

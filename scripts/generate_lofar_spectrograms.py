@@ -115,12 +115,73 @@ def generate_lofar(dataset_name, file_dir):
     row_medians = np.median(spec_db, axis=1, keepdims=True)
     spec_db_normalized = spec_db - row_medians
     
+    # ── Timezone and Metadata Annotation Processing ──────────────────────
+    # We parse the file timestamps to map absolute recording times.
+    # Note: Filenames are in UTC/GMT or local IL time. The Croatia metadata log uses Croatia local time (CEST = UTC+2).
+    # Let's inspect the first wav file's timestamp.
+    first_fname = os.path.basename(wav_files[0])
+    import re
+    from datetime import datetime, timedelta
+    match = re.search(r"(\d{8})_(\d{6})", first_fname)
+    
+    metadata_notes = []
+    if match and "croatia" in dataset_name:
+        date_str, time_str = match.groups()
+        file_dt = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S")
+        
+        # We need to determine if filenames match UTC or IL time, and offset them to CEST (Croatia Time).
+        # Let's check the date of the files:
+        # 2307 starts at 09:46:00. CEST metadata: "23/7 1248-1304 (freediving)" and "ferry".
+        # 09:46:00 UTC corresponds to 11:46:00 CEST.
+        # 2407_1 starts at 09:11:00 (which is 11:11:00 CEST). Metadata: "24/7 1111-1128 (air malfunction)".
+        # 2407_2 starts at 16:21:00 (which is 18:21:00 CEST).
+        # 2507_1 starts at 08:01:00 (which is 10:01:00 CEST).
+        # 2507_2 starts at 09:41:00 (which is 11:41:00 CEST).
+        # This confirms: Filenames are in UTC/GMT. Croatia local time (CEST) is UTC + 2 hours.
+        # We will apply a +2 hours offset to convert the filename UTC times to Croatia local times.
+        utc_offset_hours = 2
+        
+        # Metadata dictionary with Croatia CEST time ranges (day, start_hour, start_min, end_hour, end_min, annotation)
+        croatia_events = [
+            (22, 13, 13, 13, 46, "Air Malfunction"),
+            (22, 18, 47, 19, 44, "300m Route"),
+            (23, 12, 48, 13, 4,  "Freediving (Clean/Ferry)"),
+            (24, 11, 11, 11, 28, "Air Malfunction"),
+            (24, 12, 12, 12, 58, "600m Route"),
+            (24, 19, 22, 19, 57, "Snake Route"),
+            (25, 11, 22, 12, 15, "1000m Route"),
+            (25, 11, 46, 12, 7,  "Boat Noise")
+        ]
+        
+        # Scan through the timeline and find overlaps
+        # Each column's absolute time is: file_dt + timedelta(seconds=col_index * hop_length / sr) + timedelta(hours=2)
+        # For simplicity, we compute time markers in minutes relative to start of the spectrogram
+        start_cest = file_dt + timedelta(hours=utc_offset_hours)
+        
+        for ev_day, ev_sh, ev_sm, ev_eh, ev_em, label in croatia_events:
+            if ev_day == start_cest.day:
+                ev_start_dt = datetime(start_cest.year, start_cest.month, ev_day, ev_sh, ev_sm, 0)
+                ev_end_dt = datetime(start_cest.year, start_cest.month, ev_day, ev_eh, ev_em, 0)
+                
+                # Convert to minutes relative to start_cest
+                rel_start_min = (ev_start_dt - start_cest).total_seconds() / 60.0
+                rel_end_min = (ev_end_dt - start_cest).total_seconds() / 60.0
+                
+                # If the event overlaps with our timeline (0 to total_duration / 60.0)
+                total_duration_min = total_duration / 60.0
+                if rel_end_min >= 0 and rel_start_min <= total_duration_min:
+                    metadata_notes.append({
+                        "start": max(0.0, rel_start_min),
+                        "end": min(total_duration_min, rel_end_min),
+                        "label": label,
+                        "cest_str": f"{ev_sh:02d}:{ev_sm:02d}-{ev_eh:02d}:{ev_em:02d}"
+                    })
+
     # Setup plotting
     setup_plot_style()
-    fig, ax = plt.subplots(figsize=(15, 6))
+    fig, ax = plt.subplots(figsize=(15, 7.5))
     
     # Plot using a beautiful inferno color map
-    # Dynamic range limit: focus on positive enhancements above the median background
     im = ax.imshow(
         spec_db_normalized,
         aspect="auto",
@@ -131,6 +192,19 @@ def generate_lofar(dataset_name, file_dir):
         vmax=18
     )
     
+    # Overlay metadata events on the spectrogram
+    for note in metadata_notes:
+        ax.axvspan(note["start"], note["end"], color="cyan", alpha=0.12, edgecolor="cyan", linestyle="--", linewidth=1.0)
+        # Draw a vertical marker line at start and end
+        ax.axvline(note["start"], color="cyan", alpha=0.4, linestyle=":", linewidth=1.2)
+        ax.axvline(note["end"], color="cyan", alpha=0.4, linestyle=":", linewidth=1.2)
+        
+        # Add a text label above the spectrogram panel or near the top
+        mid_point = (note["start"] + note["end"]) / 2.0
+        ax.text(mid_point, n_mels * 0.88, f"{note['label']}\n({note['cest_str']} Local)",
+                color="cyan", fontsize=8.5, fontweight="bold", ha="center", va="top",
+                bbox=dict(boxstyle="round,pad=0.3", fc="#16213e", ec="cyan", alpha=0.75))
+
     # Set custom Mel-spaced frequency ticks on y-axis
     freq_ticks = [100, 250, 500, 1000, 1500, 2000, 3000, 4000]
     freq_ticks = [f for f in freq_ticks if min_freq <= f <= max_freq]
@@ -142,12 +216,18 @@ def generate_lofar(dataset_name, file_dir):
     ax.set_yticks(tick_positions)
     ax.set_yticklabels([f"{f}" for f in freq_ticks])
     
-    ax.set_xlabel("Time (minutes)", fontsize=11, fontweight="bold", labelpad=8)
+    ax.set_xlabel("Time (minutes relative to start)", fontsize=11, fontweight="bold", labelpad=8)
     ax.set_ylabel("Frequency (Hz) [Mel Scale]", fontsize=11, fontweight="bold", labelpad=8)
     
     # Title formatting
     title_ds = dataset_name.replace("_", " ").upper()
-    ax.set_title(f"LOFAR Spectrogram (Normalized Mel Scale) — {title_ds}\n(Timeframe: {total_duration/60.0:.1f} mins | Denoised via Row Median Subtraction)", 
+    
+    # Format the subtitle to display absolute start time in CEST
+    start_time_str = ""
+    if match and "croatia" in dataset_name:
+        start_time_str = f" | Start Time (CEST): {start_cest.strftime('%Y-%m-%d %H:%M:%S')}"
+        
+    ax.set_title(f"LOFAR Spectrogram (Normalized Mel Scale) — {title_ds}\n(Timeframe: {total_duration/60.0:.1f} mins | Denoised via Row Median Subtraction{start_time_str})", 
                  fontsize=13, fontweight="bold", pad=12)
     
     # Add grid
