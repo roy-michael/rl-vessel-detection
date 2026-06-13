@@ -46,11 +46,10 @@ def generate_lofar(dataset_name, file_dir):
     hop_length = n_fft // 2
     
     min_freq = 400 if dataset_name == "scooter" else 40
-    max_freq = 2000
+    max_freq = 4000
+    n_mels = 256
     
-    freqs = librosa.fft_frequencies(sr=sr, n_fft=n_fft)
-    freq_mask = (freqs >= min_freq) & (freqs <= max_freq)
-    freqs_plot = freqs[freq_mask]
+    mel_freqs = librosa.mel_frequencies(n_mels=n_mels, fmin=min_freq, fmax=max_freq)
     
     # Process file by file to avoid running out of memory
     all_downsampled_cols = []
@@ -74,9 +73,18 @@ def generate_lofar(dataset_name, file_dir):
             else:
                 y = data
             
-            # STFT magnitude
-            stft = librosa.stft(y, n_fft=n_fft, hop_length=hop_length)
-            mag = np.abs(stft[freq_mask, :])
+            # Mel spectrogram magnitude
+            melspec = librosa.feature.melspectrogram(
+                y=y,
+                sr=sr,
+                n_fft=n_fft,
+                hop_length=hop_length,
+                n_mels=n_mels,
+                fmin=min_freq,
+                fmax=max_freq
+            )
+            # mag is linear amplitude
+            mag = np.sqrt(melspec)
             
             # Downsample the time axis (average blocks of columns)
             n_cols = mag.shape[1]
@@ -117,18 +125,29 @@ def generate_lofar(dataset_name, file_dir):
         spec_db_normalized,
         aspect="auto",
         origin="lower",
-        extent=[0, total_duration / 60.0, freqs_plot[0], freqs_plot[-1]],
+        extent=[0, total_duration / 60.0, 0, n_mels - 1],
         cmap="inferno",
         vmin=-3,
         vmax=18
     )
     
+    # Set custom Mel-spaced frequency ticks on y-axis
+    freq_ticks = [100, 250, 500, 1000, 1500, 2000, 3000, 4000]
+    freq_ticks = [f for f in freq_ticks if min_freq <= f <= max_freq]
+    tick_positions = []
+    for f in freq_ticks:
+        idx = np.abs(mel_freqs - f).argmin()
+        tick_positions.append(idx)
+        
+    ax.set_yticks(tick_positions)
+    ax.set_yticklabels([f"{f}" for f in freq_ticks])
+    
     ax.set_xlabel("Time (minutes)", fontsize=11, fontweight="bold", labelpad=8)
-    ax.set_ylabel("Frequency (Hz)", fontsize=11, fontweight="bold", labelpad=8)
+    ax.set_ylabel("Frequency (Hz) [Mel Scale]", fontsize=11, fontweight="bold", labelpad=8)
     
     # Title formatting
     title_ds = dataset_name.replace("_", " ").upper()
-    ax.set_title(f"LOFAR Spectrogram (Normalized) — {title_ds}\n(Timeframe: {total_duration/60.0:.1f} mins | Denoised via Row Median Subtraction)", 
+    ax.set_title(f"LOFAR Spectrogram (Normalized Mel Scale) — {title_ds}\n(Timeframe: {total_duration/60.0:.1f} mins | Denoised via Row Median Subtraction)", 
                  fontsize=13, fontweight="bold", pad=12)
     
     # Add grid
@@ -139,8 +158,10 @@ def generate_lofar(dataset_name, file_dir):
     cbar.set_label("Signal strength above background (dB)", fontsize=10, fontweight="bold")
     cbar.ax.tick_params(labelsize=9)
     
+    out_dir = os.path.join("output", dataset_name)
+    os.makedirs(out_dir, exist_ok=True)
     output_filename = f"lofar_{dataset_name}.png"
-    output_path = os.path.join("output", output_filename)
+    output_path = os.path.join(out_dir, output_filename)
     fig.savefig(output_path, bbox_inches="tight", dpi=180, facecolor=DARK_BG)
     plt.close(fig)
     print(f"Saved LOFAR spectrogram to: {output_path}")

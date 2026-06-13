@@ -15,7 +15,7 @@ POLICY_FILE = "output/rl_q_table.json"
 
 async def train_one_episode(episode_idx, q_agent, epsilon, dataset):
     """Runs a single training episode (one pass over the WAV files in the directory)."""
-    max_freq = 2000
+    max_freq = 4000
     n_fft = 16 * 1024
     hop_length = n_fft // 2
     window_sec = 15.0
@@ -110,13 +110,21 @@ async def main():
                         default="croatia", help="Dataset to train on")
     args = parser.parse_args()
 
-    if not os.path.exists("output"):
-        os.makedirs("output")
+    _ds_prefix = {
+        "croatia":         "croatia_2507_1",
+        "croatia_2507_2":  "croatia_2507_2",
+        "croatia_2407_1":  "croatia_2407_1",
+        "croatia_2407_2":  "croatia_2407_2",
+        "croatia_2307":    "croatia_2307",
+        "scooter":         "scooter",
+    }.get(args.dataset, args.dataset)
+    policy_dir = os.path.join("output", _ds_prefix)
+    os.makedirs(policy_dir, exist_ok=True)
 
     _linear_fa = (args.agent == "linear_fa")
     policy_file = (
-        f"output/rl_{args.agent}_{args.dataset}.npy" if _linear_fa
-        else f"output/rl_{args.agent}_{args.dataset}.json"
+        f"{policy_dir}/rl_{args.agent}_{args.dataset}.npy" if _linear_fa
+        else f"{policy_dir}/rl_{args.agent}_{args.dataset}.json"
     )
     agent_titles = {
         "q_learning": "Q-LEARNING",

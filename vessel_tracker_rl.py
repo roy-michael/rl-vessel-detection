@@ -28,6 +28,18 @@ async def main():
     parser.add_argument("--headless", action="store_true", help="Run without graphical display")
     args = parser.parse_args()
 
+    _ds_prefix = {
+        "croatia":         "croatia_2507_1",
+        "croatia_2507_2":  "croatia_2507_2",
+        "croatia_2407_1":  "croatia_2407_1",
+        "croatia_2407_2":  "croatia_2407_2",
+        "croatia_2307":    "croatia_2307",
+        "scooter":         "scooter",
+    }.get(args.dataset, args.dataset)
+    
+    out_dir = os.path.join("output", _ds_prefix)
+    os.makedirs(out_dir, exist_ok=True)
+
     if args.dataset == "scooter":
         file_dir = f"{BASE_DIR}/DepartmentalCruise-2025-06-12/icListen/wav"
         report_filename = f"scooter_{args.rl_agent}_vessel_detection_report.txt"
@@ -63,7 +75,7 @@ async def main():
         report_filename = f"croatia_2507_1_{args.rl_agent}_report.txt"
         img_filename = f"croatia_2507_1_{args.rl_agent}_timeline.png"
         min_freq = 40
-    max_freq = 2000
+    max_freq = 4000
     n_fft = 16 * 1024
     hop_length = n_fft // 2 # int(1 * 1024)
     window_sec = 15.0
@@ -97,9 +109,17 @@ async def main():
         from core.rl_env import VesselTrackingRLEnv
         
         _linear_fa = (args.rl_agent == "linear_fa")
+        policy_dir = {
+            "croatia":        "croatia_2507_1",
+            "croatia_2507_2": "croatia_2507_2",
+            "croatia_2407_1": "croatia_2407_1",
+            "croatia_2407_2": "croatia_2407_2",
+            "croatia_2307":   "croatia_2307",
+            "scooter":        "scooter",
+        }.get(args.policy_dataset, args.policy_dataset)
         policy_path = (
-            f"output/rl_{args.rl_agent}_{args.policy_dataset}.npy" if _linear_fa
-            else f"output/rl_{args.rl_agent}_{args.policy_dataset}.json"
+            f"output/{policy_dir}/rl_{args.rl_agent}_{args.policy_dataset}.npy" if _linear_fa
+            else f"output/{policy_dir}/rl_{args.rl_agent}_{args.policy_dataset}.json"
         )
         if os.path.exists(policy_path):
             if args.rl_agent == "q_learning":
@@ -132,6 +152,16 @@ async def main():
     except ValueError as e:
         print(e)
         return
+
+    # Collect raw detections for the joint histogram
+    raw_detections = []
+    original_update_multi = signal_processor.tracker.update_multi
+    def custom_update_multi(current_time, detections):
+        for det in detections:
+            if det['centroid'] > 0:
+                raw_detections.append((det['centroid'], det['amplitude']))
+        return original_update_multi(current_time, detections)
+    signal_processor.tracker.update_multi = custom_update_multi
 
     await env.start()
     
@@ -254,7 +284,7 @@ async def main():
 
         # Save the textual report to a file
         try:
-            output_report_path = os.path.join("output", report_filename)
+            output_report_path = os.path.join(out_dir, report_filename)
             with open(output_report_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(report_lines))
             print(f"Saved textual report to {output_report_path}")
@@ -263,7 +293,7 @@ async def main():
 
         # Force a final tracker plot update or recreate it offline for headless runs
         try:
-            output_img_path = os.path.join("output", img_filename)
+            output_img_path = os.path.join(out_dir, img_filename)
             if agent and hasattr(agent, 'fig') and plt.fignum_exists(agent.fig.number):
                 signal_processor._update_annotations()
                 signal_processor._update_tracker_plot()
@@ -368,20 +398,101 @@ async def main():
                 ax_sim.set_title(f"Simulated Spectrogram (Tracked Vessel Signals Only) - {args.dataset.upper()}", fontsize=13, fontweight="bold")
                 ax_sim.grid(True, linestyle="--", alpha=0.3)
                 
-                _ds_prefix = {
-                    "croatia":         "croatia_2507_1",
-                    "croatia_2507_2":  "croatia_2507_2",
-                    "croatia_2407_1":  "croatia_2407_1",
-                    "croatia_2407_2":  "croatia_2407_2",
-                    "scooter":         "scooter",
-                }.get(args.dataset, args.dataset)
                 sim_spectrogram_filename = f"{_ds_prefix}_{args.rl_agent}_simulated_spectrogram.png"
-                sim_spectrogram_path = os.path.join("output", sim_spectrogram_filename)
+                sim_spectrogram_path = os.path.join(out_dir, sim_spectrogram_filename)
                 fig_sim.savefig(sim_spectrogram_path, bbox_inches="tight", dpi=150)
                 plt.close(fig_sim)
                 print(f"Saved simulated spectrogram to {sim_spectrogram_path}")
             except Exception as e:
                 print(f"Could not generate simulated spectrogram: {e}")
+
+        # Generate and save a joint histogram plot of frequency vs amplitude
+        if raw_detections:
+            try:
+                print("Generating joint histogram of frequency and amplitude...")
+                # Filter to only show frequencies between 0 and 2.5 kHz in the main pane and marginal histograms
+                filtered_dets = [d for d in raw_detections if 0.0 <= d[0] <= 2500.0]
+                if not filtered_dets:
+                    print("No detections in 0-2500 Hz range for joint histogram.")
+                    return
+                freqs_det = [d[0] for d in filtered_dets]
+                amps_det = [d[1] for d in filtered_dets]
+                
+                DARK_BG   = "#1a1a2e"
+                PANEL_BG  = "#16213e"
+                TEXT_COL  = "#e0e0e0"
+                GRID_COL  = "#3a3a5e"
+                
+                # Plotting a beautiful joint histogram
+                fig_joint = plt.figure(figsize=(10, 10), facecolor=DARK_BG)
+                gs = plt.GridSpec(4, 5, hspace=0.15, wspace=0.15,
+                                  width_ratios=[1, 1, 1, 0.6, 0.25],
+                                  height_ratios=[0.6, 1, 1, 1])
+                
+                # Main 2D density/hist plot
+                ax_joint = fig_joint.add_subplot(gs[1:4, 0:3], facecolor=PANEL_BG)
+                # Marginal histograms
+                ax_marg_x = fig_joint.add_subplot(gs[0, 0:3], sharex=ax_joint, facecolor=PANEL_BG)
+                ax_marg_y = fig_joint.add_subplot(gs[1:4, 3], sharey=ax_joint, facecolor=PANEL_BG)
+                cbar_ax = fig_joint.add_subplot(gs[1:4, 4])
+                
+                # Define y-axis upper limit using a robust percentile to filter out extreme amplitude outliers
+                if len(amps_det) > 10:
+                    q99 = np.percentile(amps_det, 99.0)
+                    max_amp = q99 if q99 > 0 else max(amps_det)
+                else:
+                    max_amp = max(amps_det) if amps_det else 1.0
+                
+                if max_amp <= 0:
+                    max_amp = 1.0
+                
+                # Plot hexbin on main axis restricted to the 0-2500 Hz and 0-max_amp range
+                hb = ax_joint.hexbin(freqs_det, amps_det, gridsize=40, cmap="inferno", mincnt=1, edgecolors='none', extent=[0, 2500, 0, max_amp])
+                
+                # Set axis limits
+                ax_joint.set_xlim(0, 2500)
+                ax_joint.set_ylim(0, max_amp * 1.05)
+                
+                # Set axis labels with units
+                ax_joint.set_xlabel("Frequency (Hz)", fontsize=10, fontweight="bold", color=TEXT_COL)
+                ax_joint.set_ylabel("Amplitude (relative units)", fontsize=10, fontweight="bold", color=TEXT_COL)
+                ax_joint.tick_params(colors=TEXT_COL, labelsize=9)
+                
+                # Configure grid ticks and subdivisions (rulers)
+                import matplotlib.ticker as ticker
+                # Frequency ruler (x-axis): major ticks every 500 Hz, minor every 100 Hz to prevent overlap
+                ax_joint.xaxis.set_major_locator(ticker.MultipleLocator(500))
+                ax_joint.xaxis.set_minor_locator(ticker.MultipleLocator(100))
+                
+                # Amplitude ruler (y-axis): reduce scale density using MaxNLocator (max 5 ticks) to show clearly
+                ax_joint.yaxis.set_major_locator(ticker.MaxNLocator(nbins=5))
+                ax_joint.yaxis.set_minor_locator(ticker.AutoMinorLocator(2))
+                
+                ax_joint.grid(True, which='major', linestyle="--", alpha=0.4, color=GRID_COL)
+                ax_joint.grid(True, which='minor', linestyle=":", alpha=0.2, color=GRID_COL)
+                
+                # Plot marginal x (frequency) hist
+                ax_marg_x.hist(freqs_det, bins=80, range=(0, 2500), color="#4A90D9", edgecolor="none", alpha=0.8)
+                ax_marg_x.axis('off')
+                
+                # Plot marginal y (amplitude) hist
+                ax_marg_y.hist(amps_det, bins=80, range=(0, max_amp), orientation='horizontal', color="#E67E22", edgecolor="none", alpha=0.8)
+                ax_marg_y.axis('off')
+                
+                # Add vertical colorbar on the right
+                cb = fig_joint.colorbar(hb, cax=cbar_ax, orientation='vertical')
+                cb.set_label("Detection Density (Count)", color=TEXT_COL, fontsize=9, labelpad=10)
+                cb.ax.tick_params(colors=TEXT_COL, labelsize=8)
+                
+                fig_joint.suptitle(f"Joint Frequency & Amplitude Distribution — {args.dataset.replace('_', ' ').upper()}", 
+                                   color=TEXT_COL, fontsize=12, fontweight="bold", y=0.95)
+                
+                joint_hist_path = os.path.join(out_dir, f"joint_histogram_{_ds_prefix}.png")
+                fig_joint.savefig(joint_hist_path, bbox_inches="tight", dpi=180, facecolor=DARK_BG)
+                plt.close(fig_joint)
+                print(f"Saved joint histogram to {joint_hist_path}")
+            except Exception as e:
+                print(f"Could not generate joint histogram: {e}")
 
 if __name__ == "__main__":
     asyncio.run(main())

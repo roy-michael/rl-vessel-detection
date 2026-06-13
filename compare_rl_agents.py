@@ -93,8 +93,8 @@ DS_PREFIX = {
 def report_path_for(agent_id: str, eval_dataset: str) -> str:
     prefix = DS_PREFIX.get(eval_dataset, eval_dataset)
     if eval_dataset == "scooter":
-        return f"output/{prefix}_{agent_id}_vessel_detection_report.txt"
-    return f"output/{prefix}_{agent_id}_report.txt"
+        return f"output/{prefix}/scooter_{agent_id}_vessel_detection_report.txt"
+    return f"output/{prefix}/{prefix}_{agent_id}_report.txt"
 
 
 # ---------------------------------------------------------------------------
@@ -462,7 +462,7 @@ def main():
     parser.add_argument("--train-dataset", default="croatia",
                         choices=["croatia", "croatia_2507_2", "croatia_2407_1", "croatia_2407_2", "croatia_2307", "scooter"])
     parser.add_argument("--eval-datasets", nargs="+",
-                        default=["croatia_2507_2", "croatia_2407_1", "croatia_2407_2", "croatia_2307", "scooter"],
+                        default=["croatia", "croatia_2507_2", "croatia_2407_1", "croatia_2407_2", "croatia_2307", "scooter"],
                         choices=["croatia", "croatia_2507_2", "croatia_2407_1", "croatia_2407_2", "croatia_2307", "scooter"],
                         help="One or more verification datasets")
     parser.add_argument("--skip-training", action="store_true",
@@ -533,15 +533,19 @@ def main():
         # Build figure
         fig = build_figure(agent_ids, agent_labels, all_metrics, all_vessels,
                             eval_ds, episode_rewards)
+        prefix = DS_PREFIX.get(eval_ds, eval_ds)
+        eval_out_dir = os.path.join(cwd, "output", prefix)
+        os.makedirs(eval_out_dir, exist_ok=True)
+
         fig_fname   = f"rl_comparison_{eval_ds}.png"
-        fig_path    = os.path.join(cwd, "output", fig_fname)
+        fig_path    = os.path.join(eval_out_dir, fig_fname)
         fig.savefig(fig_path, bbox_inches="tight", dpi=150, facecolor=fig.get_facecolor())
         plt.close(fig)
         print(f"\n  Saved figure : {fig_path}")
 
         # Write markdown report
         md_fname = f"rl_comparison_{eval_ds}.md"
-        md_path  = os.path.join(cwd, "output", md_fname)
+        md_path  = os.path.join(eval_out_dir, md_fname)
         write_markdown_report(agent_ids, agent_labels, all_metrics, all_vessels,
                                args.train_dataset, eval_ds, fig_fname, md_path)
 
