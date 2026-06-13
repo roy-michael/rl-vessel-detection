@@ -33,7 +33,7 @@ class ActiveStatesDict(dict):
         # Spawn the child SignalProcessorAgent when a new active state is added
         exists = any(p.vessel_state == key for p in self.dispatcher.active_processors)
         if not exists:
-            from core.signal_processor_agent import SignalProcessorAgent
+            from core.agent.signal_processor_agent import SignalProcessorAgent
             proc = SignalProcessorAgent(
                 env=self.dispatcher,
                 start_time=key.start_time,

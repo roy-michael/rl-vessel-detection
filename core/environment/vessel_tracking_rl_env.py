@@ -1,5 +1,5 @@
 import numpy as np
-from core.agent import VesselState
+from core.vessel_state import VesselState
 
 class VesselTrackingRLEnv:
     """

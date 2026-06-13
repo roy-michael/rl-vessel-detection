@@ -469,7 +469,7 @@ def main():
                         help="Reuse existing policy files, skip training")
     args = parser.parse_args()
 
-    cwd = os.path.dirname(os.path.abspath(__file__))
+    cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     os.makedirs(os.path.join(cwd, "output"), exist_ok=True)
 
     agent_ids    = [a[0] for a in AGENTS]

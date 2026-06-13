@@ -2,10 +2,9 @@ import os
 import asyncio
 import numpy as np
 
-from core.environment import Environment
+from core.environment import Environment, VesselTrackingRLEnv
 from core.agent import DispatcherAgent, SignalProcessorAgent
-from core.rl_env import VesselTrackingRLEnv
-from core.rl_agent import QLearningAgent, SarsaAgent, DoubleQLearningAgent, LinearFAAgent, DynaQAgent
+from core.agent import QLearningAgent, SarsaAgent, DoubleQLearningAgent, LinearFAAgent, DynaQAgent
 
 # Default dataset directory
 BASE_DIR = os.environ.get("RECORDINGS_DIR", "D:/RoyStudies/Recordings")

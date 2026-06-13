@@ -262,7 +262,7 @@ class VesselStateTracker:
         # RL-based matching/decision loop!
         if getattr(self, 'q_agent', None) is not None:
             # Detect whether the agent uses continuous states (LinearFAAgent)
-            from core.rl_agent import LinearFAAgent as _LinearFAAgent
+            from core.agent import LinearFAAgent as _LinearFAAgent
             _uses_continuous = isinstance(self.q_agent, _LinearFAAgent)
 
             for det in valid_detections:

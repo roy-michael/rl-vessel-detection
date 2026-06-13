@@ -3,10 +3,8 @@ import asyncio
 import numpy as np
 import matplotlib.pyplot as plt
 
-from core.environment import Environment
-from core.agent import DispatcherAgent, SignalProcessorAgent
-from core.rl_agent import QLearningAgent, SarsaAgent
-from core.rl_env import VesselTrackingRLEnv
+from core.environment import Environment, VesselTrackingRLEnv
+from core.agent import DispatcherAgent, SignalProcessorAgent, QLearningAgent, SarsaAgent
 
 BASE_DIR = os.environ.get("RECORDINGS_DIR", "D:/RoyStudies/Recordings")
 

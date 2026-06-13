@@ -9,9 +9,24 @@ This workspace contains tools to analyze, segment, and compare underwater acoust
 ```
 rl-vessel-detection/
 ├── core/                    # Core pipeline modules
-│   ├── agent.py             #   RL dispatcher + signal processor agents
-│   ├── environment.py       #   Async audio streaming environment
+│   ├── agent/               #   RL, dispatcher, and tracking agents package
+│   │   ├── base_agent.py    #     Base TD learning agent (Q-table, ε-greedy)
+│   │   ├── q_learning_agent.py      #     Off-policy Q-Learning
+│   │   ├── sarsa_agent.py           #     On-policy SARSA
+│   │   ├── double_q_learning_agent.py  #  Double Q-Learning (bias reduction)
+│   │   ├── linear_fa_agent.py       #     Linear FA with tile coding
+│   │   ├── dyna_q_agent.py          #     Dyna-Q (planning + model)
+│   │   ├── dispatcher_agent.py      #     Dispatcher / multi-agent parent
+│   │   └── signal_processor_agent.py   #  Child vessel tracking agent
+│   ├── environment/         #   Environment abstractions package
+│   │   ├── audio_environment.py        #  Async STFT audio streaming
+│   │   └── vessel_tracking_rl_env.py   #  MDP wrapper for RL agents
 │   └── audio_analyzer.py    #   Segment-level amplitude extractor
+├── scripts/                 # Pipeline and utility scripts
+│   ├── train_rl.py          #   Train a single RL agent
+│   ├── compare_rl_agents.py #   End-to-end train → eval → report for all agents
+│   ├── visualize_rl_results.py  #  Training curve visualisation
+│   └── generate_lofar_spectrograms.py  # LOFAR spectrogram generation
 ├── analysis/                # Named analysis and plotting scripts
 │   ├── calculate_segment_distance.py
 │   ├── compare_datasets.py

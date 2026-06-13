@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from core.agent import DispatcherAgent, SignalProcessorAgent
-from core.environment import Environment
+from core.environment import Environment, VesselTrackingRLEnv
 
 # Override by setting the RECORDINGS_DIR environment variable
 BASE_DIR = os.environ.get("RECORDINGS_DIR", "D:/RoyStudies/Recordings")
@@ -105,8 +105,7 @@ async def main():
         signal_processor = agent
         
         # Load and integrate trained RL policy
-        from core.rl_agent import QLearningAgent, SarsaAgent, DoubleQLearningAgent, LinearFAAgent, DynaQAgent
-        from core.rl_env import VesselTrackingRLEnv
+        from core.agent import QLearningAgent, SarsaAgent, DoubleQLearningAgent, LinearFAAgent, DynaQAgent
         
         _linear_fa = (args.rl_agent == "linear_fa")
         policy_dir = {
