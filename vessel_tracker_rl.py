@@ -9,7 +9,7 @@ from core.agent import DispatcherAgent, SignalProcessorAgent
 from core.environment import Environment, VesselTrackingRLEnv
 
 # Override by setting the RECORDINGS_DIR environment variable
-BASE_DIR = os.environ.get("RECORDINGS_DIR", "D:/RoyStudies/Recordings")
+BASE_DIR = os.environ.get("RECORDINGS_DIR", "C:/Users/Roy/Recordings")
 
 
 async def main():
@@ -41,7 +41,7 @@ async def main():
     os.makedirs(out_dir, exist_ok=True)
 
     if args.dataset == "scooter":
-        file_dir = f"{BASE_DIR}/DepartmentalCruise-2025-06-12/icListen/wav"
+        file_dir = f"{BASE_DIR}/scooter"
         report_filename = f"scooter_{args.rl_agent}_vessel_detection_report.txt"
         img_filename = f"scooter_{args.rl_agent}_vessel_detection_timeline.png"
         min_freq = 400
@@ -121,35 +121,37 @@ async def main():
             f"output/{policy_dir}/rl_{args.rl_agent}_{args.policy_dataset}.npy" if _linear_fa
             else f"output/{policy_dir}/rl_{args.rl_agent}_{args.policy_dataset}.json"
         )
-        if os.path.exists(policy_path):
-            if args.rl_agent == "q_learning":
-                policy = QLearningPolicy()
-            elif args.rl_agent == "sarsa":
-                policy = SarsaPolicy()
-            elif args.rl_agent == "double_q_learning":
-                policy = DoubleQLearningPolicy()
-            elif args.rl_agent == "linear_fa":
-                policy = LinearFAPolicy()
-            elif args.rl_agent == "dyna_q":
-                policy = DynaQPolicy()
-            else:
-                raise ValueError(f"Unknown rl_agent: {args.rl_agent}")
-            
-            rl_agent = RLAgent(policy=policy, epsilon=0.0)
-            rl_agent.load_policy(policy_path)
-            rl_env = VesselTrackingRLEnv(signal_processor.tracker)
-            
-            signal_processor.tracker.rl_agent = rl_agent
-            signal_processor.tracker.rl_env = rl_env
-            signal_processor.tracker.rl_epsilon = 0.0
-            signal_processor.tracker.rl_stats = {
-                'total_reward': 0.0,
-                'action_counts': {0: 0, 1: 0, 2: 0},
-                'status_counts': {}
-            }
-            print(f"Successfully integrated trained {args.rl_agent} tracking policy (trained on {args.policy_dataset}).")
+        if args.rl_agent == "q_learning":
+            policy = QLearningPolicy()
+        elif args.rl_agent == "sarsa":
+            policy = SarsaPolicy()
+        elif args.rl_agent == "double_q_learning":
+            policy = DoubleQLearningPolicy()
+        elif args.rl_agent == "linear_fa":
+            policy = LinearFAPolicy()
+        elif args.rl_agent == "dyna_q":
+            policy = DynaQPolicy()
         else:
-            print(f"Warning: Trained {args.rl_agent} policy (trained on {args.policy_dataset}) not found at {policy_path}. Falling back to heuristic tracking rules.")
+            raise ValueError(f"Unknown rl_agent: {args.rl_agent}")
+        
+        rl_agent = RLAgent(policy=policy, epsilon=0.1) # Default training epsilon
+        if os.path.exists(policy_path):
+            rl_agent.load_policy(policy_path)
+            rl_agent.epsilon = 0.0 # Evaluation mode
+            print(f"Loaded trained {args.rl_agent} tracking policy from {policy_path}.")
+        else:
+            print(f"No trained {args.rl_agent} policy found at {policy_path}. Starting training from scratch.")
+        
+        rl_env = VesselTrackingRLEnv(signal_processor.tracker)
+        signal_processor.tracker.rl_agent = rl_agent
+        signal_processor.tracker.rl_env = rl_env
+        signal_processor.tracker.rl_epsilon = rl_agent.epsilon
+        signal_processor.tracker.rl_stats = {
+            'total_reward': 0.0,
+            'action_counts': {0: 0, 1: 0, 2: 0},
+            'status_counts': {}
+        }
+
 
     except ValueError as e:
         print(e)
@@ -283,6 +285,13 @@ async def main():
             log(f"  Actions Taken:       Reject (A0): {action_counts.get(0, 0)}, Associate (A1): {action_counts.get(1, 0)}, Spawn (A2): {action_counts.get(2, 0)}")
             log(f"  Outcome Statuses:    {dict(rl_stats['status_counts'])}")
             log("="*70 + "\n")
+
+            # Save the trained policy
+            try:
+                signal_processor.tracker.rl_agent.save_policy(policy_path)
+                print(f"Saved trained {args.rl_agent} policy to {policy_path}")
+            except Exception as e:
+                print(f"Could not save trained policy: {e}")
 
         # Save the textual report to a file
         try:

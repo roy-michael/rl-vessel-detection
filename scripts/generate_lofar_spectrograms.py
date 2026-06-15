@@ -5,14 +5,14 @@ import librosa
 import numpy as np
 import matplotlib.pyplot as plt
 
-BASE_DIR = os.environ.get("RECORDINGS_DIR", "D:/RoyStudies/Recordings")
+BASE_DIR = os.environ.get("RECORDINGS_DIR", "C:/Users/Roy/Recordings")
 datasets = {
     "croatia_2507_1": f"{BASE_DIR}/Croatia/Ocean Sonics/2507_1",
     "croatia_2507_2": f"{BASE_DIR}/Croatia/Ocean Sonics/2507_2",
     "croatia_2407_1": f"{BASE_DIR}/Croatia/Ocean Sonics/2407_1",
     "croatia_2407_2": f"{BASE_DIR}/Croatia/Ocean Sonics/2407_2",
     "croatia_2307":   f"{BASE_DIR}/Croatia/Ocean Sonics/2307",
-    "scooter":        f"{BASE_DIR}/DepartmentalCruise-2025-06-12/icListen/wav"
+    "scooter":        f"{BASE_DIR}/scooter"
 }
 
 # Dark aesthetics matching premium design theme

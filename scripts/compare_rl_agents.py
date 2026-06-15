@@ -481,7 +481,7 @@ def main():
     # -----------------------------------------------------------------------
     if not args.skip_training:
         for aid in agent_ids:
-            cmd = [PYTHON, "train_rl.py", "--agent", aid, "--dataset", args.train_dataset]
+            cmd = [PYTHON, "scripts/train_rl.py", "--agent", aid, "--dataset", args.train_dataset]
             print(f"\n{'='*60}\n  TRAINING: {aid} on {args.train_dataset}\n{'='*60}")
             rc, out, err = run_step(cmd, cwd)
             print(out[-3000:] if len(out) > 3000 else out)

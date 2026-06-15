@@ -30,7 +30,7 @@ async def train_one_episode(episode_idx, rl_agent, epsilon, dataset):
     consolidation_threshold_hz = 25.0
 
     if dataset == "scooter":
-        file_dir = f"{BASE_DIR}/DepartmentalCruise-2025-06-12/icListen/wav"
+        file_dir = f"{BASE_DIR}/scooter"
         min_freq = 400
     elif dataset == "croatia_2507_2":
         file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2507_2"
@@ -136,7 +136,7 @@ async def main():
     agent_title = agent_titles.get(args.agent, args.agent.upper())
 
     if args.dataset == "scooter":
-        file_dir = f"{BASE_DIR}/DepartmentalCruise-2025-06-12/icListen/wav"
+        file_dir = f"{BASE_DIR}/scooter"
     elif args.dataset == "croatia_2507_2":
         file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2507_2"
     elif args.dataset == "croatia_2407_1":
