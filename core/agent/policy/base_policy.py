@@ -105,8 +105,11 @@ class TabularPolicy(Policy):
         return self.get_best_action(state)
 
     def get_state(self, det: dict, rl_env) -> tuple:
-        """Delegates to the environment's discrete state encoder."""
-        return rl_env.get_state(det)
+        """Delegates to the environment's state encoder and returns the discrete representation."""
+        state_obj = rl_env.get_state(det)
+        if hasattr(state_obj, 'to_discrete'):
+            return state_obj.to_discrete()
+        return state_obj
 
     # ------------------------------------------------------------------
     # Persistence

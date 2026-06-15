@@ -78,7 +78,7 @@ class DispatcherAgent:
         self.headless = headless
         
         self.window_sec = window_sec
-        self.current_time = 0.0
+        self.current_time = getattr(self._env, "start_timestamp", 0.0)
         self.frames_observed = 0
 
         # NMF Analysis setup
@@ -276,6 +276,7 @@ class DispatcherAgent:
                 freqs = self._env.freqs_plot
                 num_freqs = len(freqs)
                 
+                np.random.seed(42)
                 H_init = np.random.rand(self.n_components, num_freqs) * 0.01 + 0.01
                 centers_norm = np.power(np.linspace(0, 1, self.n_components), 2)
                 centers = centers_norm * (freqs[-1] - freqs[0]) + freqs[0]
@@ -592,12 +593,15 @@ class DispatcherAgent:
         # RL-based matching/decision loop
         if self.rl_agent is not None:
             for det in valid_detections:
-                state = self.rl_agent.observe(det, self.rl_env)
-                action = self.rl_agent.act(state)
-                reward, step_info = self.rl_env.step(action, det, current_time)
-                next_state = self.rl_agent.observe(det, self.rl_env)
+                current_state = self.rl_agent.observe(det, self.rl_env)
                 
-                self.rl_agent.step(state, action, reward, next_state)
+                if hasattr(self, '_prev_rl_transition') and self._prev_rl_transition is not None:
+                    p_state, p_action, p_reward = self._prev_rl_transition
+                    self.rl_agent.step(p_state, p_action, p_reward, current_state)
+                
+                action = self.rl_agent.act(current_state)
+                reward, step_info = self.rl_env.step(action, det, current_time)
+                self._prev_rl_transition = (current_state, action, reward)
                     
                 if self.rl_stats is not None:
                     self.rl_stats['total_reward'] += reward
@@ -715,6 +719,13 @@ class DispatcherAgent:
         if self.frames_observed % 25 == 0:
             self.consolidate_all_vessels()
 
+    def finalize_rl_training(self):
+        """Finalizes the last pending RL transition at the end of the training episode."""
+        if hasattr(self, '_prev_rl_transition') and self._prev_rl_transition is not None and self.rl_agent is not None:
+            p_state, p_action, p_reward = self._prev_rl_transition
+            self.rl_agent.step(p_state, p_action, p_reward, None)
+            self._prev_rl_transition = None
+
     def _update_annotations(self):
         if self.headless:
             return
@@ -752,7 +763,7 @@ class DispatcherAgent:
 
         self.ax_track.grid(True, linestyle="--", alpha=0.5)
         self.ax_track.set_ylim(self.min_freq, self.max_freq)
-        self.ax_track.set_xlabel("Absolute Time (seconds)")
+        self.ax_track.set_xlabel("Real Time (HH:MM:SS)")
         self.ax_track.set_ylabel("Frequency (Hz)")
         self.ax_track.set_title("Vessel Speed States Timeline")
 
@@ -869,10 +880,23 @@ class DispatcherAgent:
         if hasattr(self, 'ax_amp'):
             self.ax_amp.axvline(self.current_time, color="red", linestyle="--", linewidth=1.0)
 
-        t_limit = max(15.0, self.current_time + 1.0)
-        self.ax_track.set_xlim(0, t_limit)
+        t_start = getattr(self._env, "start_timestamp", 0.0)
+        t_limit = max(t_start + 15.0, self.current_time + 1.0)
+        self.ax_track.set_xlim(t_start, t_limit)
         if hasattr(self, 'ax_amp'):
-            self.ax_amp.set_xlim(0, t_limit)
+            self.ax_amp.set_xlim(t_start, t_limit)
+
+        import datetime
+        from matplotlib.ticker import FuncFormatter
+        def time_formatter(x, pos):
+            try:
+                dt = datetime.datetime.fromtimestamp(x)
+                return dt.strftime("%H:%M:%S")
+            except Exception:
+                return f"{x:.1f}"
+        self.ax_track.xaxis.set_major_formatter(FuncFormatter(time_formatter))
+        if hasattr(self, 'ax_amp'):
+            self.ax_amp.xaxis.set_major_formatter(FuncFormatter(time_formatter))
 
         # Plot RL decisions
         if hasattr(self, 'rl_history') and self.rl_history:
@@ -957,6 +981,7 @@ class DispatcherAgent:
             observation, status = await self._env.observe()
             if observation is None:
                 self.completed = True
+                self.finalize_rl_training()
                 break
 
             self.frames_observed += 1
@@ -990,7 +1015,7 @@ class DispatcherAgent:
                 if self._nmf_model is None:
                     await self._background_update_nmf_model()
                 elif self.frames_observed % 300 == 0:
-                    asyncio.create_task(self._background_update_nmf_model())
+                    await self._background_update_nmf_model()
 
             # 2. Project activations using existing dictionary components via KL updates
             if self._nmf_model is not None:

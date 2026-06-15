@@ -27,9 +27,12 @@ class DynaQPolicy(TabularPolicy):
                next_state, epsilon: float) -> None:
         # --- Step 1: Real Q-learning update ---
         self._ensure_state(state)
-        self._ensure_state(next_state)
+        if next_state is None:
+            max_future_q = 0.0
+        else:
+            self._ensure_state(next_state)
+            max_future_q = float(np.max(self._q_table[next_state]))
         old_q = self._q_table[state][action]
-        max_future_q = float(np.max(self._q_table[next_state]))
         td_target = reward + self.gamma * max_future_q
         self._q_table[state][action] = old_q + self.alpha * (td_target - old_q)
 
@@ -46,9 +49,12 @@ class DynaQPolicy(TabularPolicy):
         for sim_state, sim_action in random.choices(self._model_keys, k=n):
             sim_next_state, sim_reward = self._model[(sim_state, sim_action)]
             self._ensure_state(sim_state)
-            self._ensure_state(sim_next_state)
+            if sim_next_state is None:
+                sim_max_q = 0.0
+            else:
+                self._ensure_state(sim_next_state)
+                sim_max_q = float(np.max(self._q_table[sim_next_state]))
             sim_old_q = self._q_table[sim_state][sim_action]
-            sim_max_q = float(np.max(self._q_table[sim_next_state]))
             sim_target = sim_reward + self.gamma * sim_max_q
             self._q_table[sim_state][sim_action] = (
                 sim_old_q + self.alpha * (sim_target - sim_old_q)

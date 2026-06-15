@@ -15,11 +15,13 @@ class SarsaPolicy(TabularPolicy):
     def update(self, state, action: int, reward: float,
                next_state, epsilon: float) -> None:
         self._ensure_state(state)
-        self._ensure_state(next_state)
-
-        # On-policy: select next action with the current exploration rate
-        next_action = self.get_action(next_state, epsilon)
-        next_q = self._q_table[next_state][next_action]
+        if next_state is None:
+            next_q = 0.0
+        else:
+            self._ensure_state(next_state)
+            # On-policy: select next action with the current exploration rate
+            next_action = self.get_action(next_state, epsilon)
+            next_q = self._q_table[next_state][next_action]
 
         old_q = self._q_table[state][action]
         td_target = reward + self.gamma * next_q

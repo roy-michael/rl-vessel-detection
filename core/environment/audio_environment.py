@@ -25,6 +25,21 @@ class Environment:
         self.wav_files = sorted(glob.glob(os.path.join(file_dir, "*.wav")))
         if max_files is not None:
             self.wav_files = self.wav_files[:max_files]
+            
+        # Extract base real timestamp from the first WAV file
+        self.start_timestamp = 0.0
+        if self.wav_files:
+            import re
+            from datetime import datetime
+            first_file = os.path.basename(self.wav_files[0])
+            match = re.search(r"(\d{8})_(\d{6})", first_file)
+            if match:
+                try:
+                    dt = datetime.strptime(match.group(0), "%Y%m%d_%H%M%S")
+                    self.start_timestamp = dt.timestamp()
+                except Exception as e:
+                    print(f"Error parsing start time from {first_file}: {e}")
+                    
         self.min_freq = min_freq
         self.max_freq = max_freq
         self.n_fft = n_fft

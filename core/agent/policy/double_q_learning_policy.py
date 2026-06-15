@@ -53,23 +53,31 @@ class DoubleQLearningPolicy(TabularPolicy):
 
     def update(self, state, action: int, reward: float,
                next_state, epsilon: float) -> None:
-        self._ensure_state(state)
-        self._ensure_state(next_state)
-
-        if random.random() < 0.5:
-            # Update Q_A; evaluate with Q_B
-            a_star = int(np.argmax(self._q_table[next_state]))
-            old_q = self._q_table[state][action]
-            eval_q = self._q_table_b[next_state][a_star]
-            td_target = reward + self.gamma * eval_q
-            self._q_table[state][action] = old_q + self.alpha * (td_target - old_q)
-        else:
-            # Update Q_B; evaluate with Q_A
-            a_star = int(np.argmax(self._q_table_b[next_state]))
-            old_q = self._q_table_b[state][action]
-            eval_q = self._q_table[next_state][a_star]
-            td_target = reward + self.gamma * eval_q
-            self._q_table_b[state][action] = old_q + self.alpha * (td_target - old_q)
+         self._ensure_state(state)
+         if next_state is None:
+             td_target = reward
+             if random.random() < 0.5:
+                 old_q = self._q_table[state][action]
+                 self._q_table[state][action] = old_q + self.alpha * (td_target - old_q)
+             else:
+                 old_q = self._q_table_b[state][action]
+                 self._q_table_b[state][action] = old_q + self.alpha * (td_target - old_q)
+         else:
+             self._ensure_state(next_state)
+             if random.random() < 0.5:
+                 # Update Q_A; evaluate with Q_B
+                 a_star = int(np.argmax(self._q_table[next_state]))
+                 old_q = self._q_table[state][action]
+                 eval_q = self._q_table_b[next_state][a_star]
+                 td_target = reward + self.gamma * eval_q
+                 self._q_table[state][action] = old_q + self.alpha * (td_target - old_q)
+             else:
+                 # Update Q_B; evaluate with Q_A
+                 a_star = int(np.argmax(self._q_table_b[next_state]))
+                 old_q = self._q_table_b[state][action]
+                 eval_q = self._q_table[next_state][a_star]
+                 td_target = reward + self.gamma * eval_q
+                 self._q_table_b[state][action] = old_q + self.alpha * (td_target - old_q)
 
     # ------------------------------------------------------------------
     # Persistence — save/load both tables

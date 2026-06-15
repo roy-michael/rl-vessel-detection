@@ -415,9 +415,16 @@ def write_markdown_report(agent_ids, agent_labels, all_metrics, all_vessels,
         lines.append("| Vessel | Window (s) | Duration (s) | Mean Freq (Hz) | Freq σ (Hz) | Mean Amp | Amp σ | Stages |")
         lines.append("| :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
         for v in vessels:
+            import datetime
+            try:
+                start_str = datetime.datetime.fromtimestamp(v['start_t']).strftime("%H:%M:%S")
+                end_str = datetime.datetime.fromtimestamp(v['end_t']).strftime("%H:%M:%S")
+                win_str = f"{start_str} – {end_str}"
+            except Exception:
+                win_str = f"{v['start_t']:.0f} – {v['end_t']:.0f}"
             lines.append(
                 f"| **{v['id']}** "
-                f"| {v['start_t']:.0f} – {v['end_t']:.0f} "
+                f"| {win_str} "
                 f"| {v['duration']:.0f} "
                 f"| {v['mean_freq']:.1f} "
                 f"| ±{v['freq_std']:.1f} "
@@ -467,6 +474,8 @@ def main():
                         help="One or more verification datasets")
     parser.add_argument("--skip-training", action="store_true",
                         help="Reuse existing policy files, skip training")
+    parser.add_argument("--episodes", type=int, default=150,
+                        help="Number of episodes per agent training run")
     args = parser.parse_args()
 
     cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -481,13 +490,64 @@ def main():
     # -----------------------------------------------------------------------
     if not args.skip_training:
         for aid in agent_ids:
-            cmd = [PYTHON, "train_rl.py", "--agent", aid, "--dataset", args.train_dataset]
+            cmd = [PYTHON, "-m", "scripts.train_rl", "--agent", aid, "--dataset", args.train_dataset, "--episodes", str(args.episodes)]
             print(f"\n{'='*60}\n  TRAINING: {aid} on {args.train_dataset}\n{'='*60}")
             rc, out, err = run_step(cmd, cwd)
             print(out[-3000:] if len(out) > 3000 else out)
             if rc != 0:
                 print(f"[ERROR] {err[-500:]}")
             episode_rewards[aid] = parse_episode_rewards(out)
+
+        # Generate dedicated comparative convergence plots (both combined and individual grid)
+        train_prefix = DS_PREFIX.get(args.train_dataset, args.train_dataset)
+        train_out_dir = os.path.join(cwd, "output", train_prefix)
+        os.makedirs(train_out_dir, exist_ok=True)
+        
+        # Save raw rewards data
+        with open(os.path.join(train_out_dir, "convergence_history.json"), "w") as f:
+            json.dump(episode_rewards, f, indent=4)
+            
+        plt.style.use('dark_background')
+        
+        # 1. Combined plot
+        fig_comb, ax_comb = plt.subplots(figsize=(12, 7))
+        fig_comb.patch.set_facecolor('#1a1a2e')
+        ax_comb.set_facecolor('#16213e')
+        for aid, label in zip(agent_ids, agent_labels):
+            rewards = episode_rewards.get(aid, [])
+            if rewards:
+                ax_comb.plot(range(1, len(rewards) + 1), rewards, marker='o', markersize=3, linewidth=2.0, color=COLORS[aid], label=label.replace("\n", " "))
+        ax_comb.set_title(f"Comparative Policy Convergence ({args.train_dataset.upper()})", fontsize=14, fontweight='bold', pad=15)
+        ax_comb.set_xlabel("Training Episode", fontsize=11, labelpad=8)
+        ax_comb.set_ylabel("Cumulative Episode Reward", fontsize=11, labelpad=8)
+        ax_comb.grid(True, color='#2d2d4e', linestyle='--', alpha=0.6)
+        legend = ax_comb.legend(facecolor='#1a1a2e', edgecolor='#2d2d4e', loc='lower right')
+        plt.setp(legend.get_texts(), color='#e0e0e0')
+        fig_comb.savefig(os.path.join(train_out_dir, "convergence_combined.png"), dpi=300, bbox_inches='tight', facecolor=fig_comb.get_facecolor())
+        plt.close(fig_comb)
+        
+        # 2. Individual Subplots Grid
+        fig_indiv, axes = plt.subplots(3, 2, figsize=(15, 18))
+        fig_indiv.patch.set_facecolor('#1a1a2e')
+        axes_flat = axes.flatten()
+        for idx, (aid, label) in enumerate(zip(agent_ids, agent_labels)):
+            ax = axes_flat[idx]
+            ax.set_facecolor('#16213e')
+            rewards = episode_rewards.get(aid, [])
+            if rewards:
+                ax.plot(range(1, len(rewards) + 1), rewards, marker='o', markersize=4, linewidth=2.2, color=COLORS[aid])
+            ax.set_title(f"{label.replace(chr(10), ' ')} Convergence", fontsize=12, fontweight='bold', color=COLORS[aid])
+            ax.set_xlabel("Episode", fontsize=9)
+            ax.set_ylabel("Cumulative Reward", fontsize=9)
+            ax.grid(True, color='#2d2d4e', linestyle='--', alpha=0.5)
+            ax.tick_params(colors='#e0e0e0', labelsize=8)
+        axes_flat[5].axis('off')
+        plt.suptitle(f"Individual RL Agent Convergence Curves ({args.train_dataset.upper()})", fontsize=16, fontweight='bold', y=0.98, color='#e0e0e0')
+        plt.tight_layout(rect=[0, 0, 1, 0.95])
+        fig_indiv.savefig(os.path.join(train_out_dir, "convergence_individual.png"), dpi=300, bbox_inches='tight', facecolor=fig_indiv.get_facecolor())
+        plt.close(fig_indiv)
+        
+        print(f"\n[INFO] Saved comparative convergence plots to {train_out_dir}")
     else:
         print("Skipping training (--skip-training).")
 

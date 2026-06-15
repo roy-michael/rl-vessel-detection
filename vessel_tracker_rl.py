@@ -237,7 +237,10 @@ async def main():
                 min_start = min(s.start_time for s in segs_sorted)
                 max_end = max((s.end_time or agent.current_time) for s in segs_sorted)
                 mean_freq = np.mean([s.mean_frequency for s in segs_sorted])
-                log(f"{vid:<15} | {status:<16} | {min_start:.1f}s - {max_end:.1f}s | {dur:.1f}s | {mean_freq:.1f} Hz")
+                import datetime
+                h_start = datetime.datetime.fromtimestamp(min_start).strftime("%H:%M:%S")
+                h_end = datetime.datetime.fromtimestamp(max_end).strftime("%H:%M:%S")
+                log(f"{vid:<15} | {status:<16} | {h_start} - {h_end} ({min_start:.1f}s - {max_end:.1f}s) | {dur:.1f}s | {mean_freq:.1f} Hz")
             log("="*70 + "\n")
             
             for rank, (vid, dur, segs) in enumerate(vessel_durations):
@@ -257,14 +260,19 @@ async def main():
                 else:
                     overall_amp = 0.0
                 
+                import datetime
+                h_start = datetime.datetime.fromtimestamp(min_start).strftime("%H:%M:%S")
+                h_end = datetime.datetime.fromtimestamp(max_end).strftime("%H:%M:%S")
                 log(f"\n>>> {vid} [{dominance_status}] (Total Active Duration: {dur:.1f}s, Weighted Mean Amp: {overall_amp:.4f}):")
-                log(f"  Absolute Active Time Window: {min_start:.1f}s - {max_end:.1f}s")
+                log(f"  Absolute Active Time Window: {min_start:.1f}s - {max_end:.1f}s ({h_start} - {h_end})")
                 for s_idx, state in enumerate(segs_sorted):
                     status = "ACTIVE" if state in active_states else "COMPLETED"
                     s_dur = (state.end_time or agent.current_time) - state.start_time
                     mean_amp = np.mean(state.amplitudes) if state.amplitudes else 0.0
+                    h_s_start = datetime.datetime.fromtimestamp(state.start_time).strftime("%H:%M:%S")
+                    h_s_end = datetime.datetime.fromtimestamp(state.end_time or agent.current_time).strftime("%H:%M:%S")
                     log(f"  Speed Stage {s_idx+1} [{status}]:")
-                    log(f"    Interval:       {state.start_time:.1f}s - {(state.end_time or agent.current_time):.1f}s (Duration: {s_dur:.1f}s)")
+                    log(f"    Interval:       {state.start_time:.1f}s - {(state.end_time or agent.current_time):.1f}s ({h_s_start} - {h_s_end}) (Duration: {s_dur:.1f}s)")
                     log(f"    Mean Frequency: {state.mean_frequency:.1f} Hz")
                     log(f"    Mean Amplitude: {mean_amp:.4f}")
                     log(f"    Total Variance: {state.total_variance:.1f} Hz^2 (Std Dev: {np.sqrt(state.total_variance):.1f} Hz)")
@@ -336,8 +344,9 @@ async def main():
                     if total_dur >= min_track_dur:
                         valid_states.extend(segs)
 
+                t_start = getattr(agent._env, "start_timestamp", 0.0)
                 dt = 0.5
-                t_grid = np.arange(0, max_time, dt)
+                t_grid = np.arange(t_start, max_time, dt)
                 f_grid = np.linspace(min_freq, max_freq, 800)
                 spec_grid = np.zeros((len(f_grid), len(t_grid)))
                 
@@ -389,16 +398,26 @@ async def main():
                     spec_grid_db,
                     aspect="auto",
                     origin="lower",
-                    extent=[0, max_time, min_freq, max_freq],
+                    extent=[t_start, max_time, min_freq, max_freq],
                     cmap="inferno",
                     vmin=-60,
                     vmax=np.max(spec_grid_db)
                 )
                 fig_sim.colorbar(im_sim, ax=ax_sim, label="Simulated Amplitude (dB)")
-                ax_sim.set_xlabel("Absolute Time (seconds)", fontsize=11, fontweight="bold")
+                ax_sim.set_xlabel("Real Time (HH:MM:SS)", fontsize=11, fontweight="bold")
                 ax_sim.set_ylabel("Frequency (Hz)", fontsize=11, fontweight="bold")
                 ax_sim.set_title(f"Simulated Spectrogram (Tracked Vessel Signals Only) - {args.dataset.upper()}", fontsize=13, fontweight="bold")
                 ax_sim.grid(True, linestyle="--", alpha=0.3)
+
+                import datetime
+                from matplotlib.ticker import FuncFormatter
+                def time_formatter(x, pos):
+                    try:
+                        dt = datetime.datetime.fromtimestamp(x)
+                        return dt.strftime("%H:%M:%S")
+                    except Exception:
+                        return f"{x:.1f}"
+                ax_sim.xaxis.set_major_formatter(FuncFormatter(time_formatter))
                 
                 sim_spectrogram_filename = f"{_ds_prefix}_{args.rl_agent}_simulated_spectrogram.png"
                 sim_spectrogram_path = os.path.join(out_dir, sim_spectrogram_filename)

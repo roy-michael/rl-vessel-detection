@@ -35,11 +35,21 @@ async def train_one_episode(episode_idx, rl_agent, epsilon, dataset):
     elif dataset == "croatia_2507_2":
         file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2507_2"
         min_freq = 40
+    elif dataset == "croatia_2407_1":
+        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2407_1"
+        min_freq = 40
+    elif dataset == "croatia_2407_2":
+        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2407_2"
+        min_freq = 40
+    elif dataset == "croatia_2307":
+        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2307"
+        min_freq = 40
     else:
         file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2507_1"
         min_freq = 40
 
-    env = Environment(file_dir, min_freq, max_freq, n_fft, hop_length, max_files=3)
+
+    env = Environment(file_dir, min_freq, max_freq, n_fft, hop_length, max_files=10)
     
     # We initialize DispatcherAgent in headless mode with threshold parameters
     dispatcher = DispatcherAgent(
@@ -108,6 +118,7 @@ async def main():
     parser.add_argument("--dataset", type=str,
                         choices=["croatia", "croatia_2507_2", "croatia_2407_1", "croatia_2407_2", "croatia_2307", "scooter"],
                         default="croatia", help="Dataset to train on")
+    parser.add_argument("--episodes", type=int, default=150, help="Number of training episodes")
     args = parser.parse_args()
 
     _ds_prefix = {
@@ -154,7 +165,7 @@ async def main():
     print(f"Data Source: {file_dir}")
 
     # Hyperparameters
-    num_episodes = 3
+    num_episodes = args.episodes
     initial_epsilon = 0.4
     min_epsilon = 0.05
     alpha = 0.15

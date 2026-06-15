@@ -21,10 +21,11 @@ class LinearFAPolicy(Policy):
     N_ACTIONS = 3
 
     def __init__(self, alpha: float = 0.01, gamma: float = 0.9,
-                 n_tilings: int = 4, n_tiles: int = 8,
+                 n_tilings: int = 4, n_tiles: int = 6,
                  dist_range: tuple = (0.0, 200.0),
                  amp_range: tuple = (0.0, 0.1),
-                 score_range: tuple = (0.0, 1.0)):
+                 score_range: tuple = (0.0, 1.0),
+                 age_range: tuple = (0.0, 60.0)):
         self.alpha = alpha / n_tilings   # Normalise by tiling count
         self.gamma = gamma
         self.n_tilings = n_tilings
@@ -32,8 +33,9 @@ class LinearFAPolicy(Policy):
         self.dist_range = dist_range
         self.amp_range = amp_range
         self.score_range = score_range
+        self.age_range = age_range
 
-        self.n_features = n_tilings * (n_tiles ** 3)
+        self.n_features = n_tilings * (n_tiles ** 4)
         self.weights = np.zeros((self.N_ACTIONS, self.n_features))
 
     # ------------------------------------------------------------------
@@ -41,10 +43,10 @@ class LinearFAPolicy(Policy):
     # ------------------------------------------------------------------
 
     def _tile_indices(self, state: tuple) -> list:
-        """Active tile indices for a continuous state (dist, amp, score)."""
-        dist, amp, score = state
+        """Active tile indices for a continuous state (dist, amp, score, age)."""
+        dist, amp, score, age = state
         indices = []
-        tiling_size = self.n_tiles ** 3
+        tiling_size = self.n_tiles ** 4
 
         for tiling in range(self.n_tilings):
             offset = tiling / self.n_tilings
@@ -57,10 +59,12 @@ class LinearFAPolicy(Policy):
             d_idx = tile_idx(dist, *self.dist_range)
             a_idx = tile_idx(amp,  *self.amp_range)
             s_idx = tile_idx(score, *self.score_range)
+            g_idx = tile_idx(age, *self.age_range)
             flat_idx = (tiling * tiling_size
-                        + d_idx * (self.n_tiles ** 2)
-                        + a_idx * self.n_tiles
-                        + s_idx)
+                        + d_idx * (self.n_tiles ** 3)
+                        + a_idx * (self.n_tiles ** 2)
+                        + s_idx * self.n_tiles
+                        + g_idx)
             indices.append(flat_idx)
         return indices
 
@@ -92,14 +96,20 @@ class LinearFAPolicy(Policy):
         return self.get_best_action(state)
 
     def get_state(self, det: dict, rl_env) -> tuple:
-        """Returns the *continuous* state; rl_env supplies get_continuous_state()."""
-        return rl_env.get_continuous_state(det)
+        """Returns the *continuous* state representation from the TrackingState."""
+        state_obj = rl_env.get_state(det)
+        if hasattr(state_obj, 'to_continuous'):
+            return state_obj.to_continuous()
+        return state_obj
 
     def update(self, state: tuple, action: int, reward: float,
                next_state: tuple, epsilon: float) -> None:
         """Semi-gradient TD(0) weight update."""
         q_sa = self._q_value(state, action)
-        max_q_next = max(self._q_value(next_state, a) for a in range(self.N_ACTIONS))
+        if next_state is None:
+            max_q_next = 0.0
+        else:
+            max_q_next = max(self._q_value(next_state, a) for a in range(self.N_ACTIONS))
         td_error = reward + self.gamma * max_q_next - q_sa
         phi = self._phi(state)
         self.weights[action] += self.alpha * td_error * phi
@@ -113,5 +123,8 @@ class LinearFAPolicy(Policy):
         print(f"Saved LinearFA policy weights to {filepath}")
 
     def load(self, filepath: str) -> None:
-        self.weights = np.load(filepath)
+        loaded_weights = np.load(filepath)
+        if loaded_weights.shape != self.weights.shape:
+            raise ValueError(f"Shape mismatch: loaded {loaded_weights.shape}, expected {self.weights.shape}")
+        self.weights = loaded_weights
         print(f"Loaded LinearFA policy weights from {filepath} (shape: {self.weights.shape})")
