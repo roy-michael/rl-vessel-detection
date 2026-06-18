@@ -5,15 +5,15 @@ import numpy as np
 from core.environment import Environment, VesselTrackingRLEnv
 from core.agent import DispatcherAgent, SignalProcessorAgent
 from core.agent.rl_agent import RLAgent
-from core.agent.policy import QLearningPolicy, SarsaPolicy, DoubleQLearningPolicy, LinearFAPolicy, DynaQPolicy
+from core.agent.policy import DoubleQLearningPolicy, LinearFAPolicy, DynaQPolicy, ActorCriticPolicy
 
 # Default dataset directory
-BASE_DIR = os.environ.get("RECORDINGS_DIR", "D:/RoyStudies/Recordings")
+BASE_DIR = os.environ.get("RECORDINGS_DIR", "C:/Users/Roy/Recordings")
 croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
 FILE_DIR = f"{croatia_base_dir}/2507_1"
 POLICY_FILE = "output/rl_q_table.json"
 
-async def train_one_episode(episode_idx, rl_agent, epsilon, dataset):
+async def train_one_episode(episode_idx, rl_agent, epsilon, env):
     """Runs a single training episode (one pass over the WAV files in the directory)."""
     max_freq = 4000
     n_fft = 16 * 1024
@@ -29,31 +29,11 @@ async def train_one_episode(episode_idx, rl_agent, epsilon, dataset):
     min_variance_floor = 25.0
     consolidation_threshold_hz = 25.0
 
-    if dataset == "scooter":
-        file_dir = f"{BASE_DIR}/DepartmentalCruise-2025-06-12/icListen/wav"
-        min_freq = 400
-    elif dataset == "croatia_2507_2":
-        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2507_2"
-        min_freq = 40
-    elif dataset == "croatia_2407_1":
-        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2407_1"
-        min_freq = 40
-    elif dataset == "croatia_2407_2":
-        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2407_2"
-        min_freq = 40
-    elif dataset == "croatia_2307":
-        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2307"
-        min_freq = 40
-    else:
-        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2507_1"
-        min_freq = 40
+    env.reset()
 
-
-    env = Environment(file_dir, min_freq, max_freq, n_fft, hop_length, max_files=10)
-    
     # We initialize DispatcherAgent in headless mode with threshold parameters
     dispatcher = DispatcherAgent(
-        env, min_freq, max_freq, n_fft, n_components, 200, window_sec, headless=True,
+        env, env.min_freq, max_freq, n_fft, n_components, 200, window_sec, headless=True,
         proximity_threshold_hz=proximity_threshold_hz,
         association_threshold_hz=association_threshold_hz,
         peak_spread_window_bins=peak_spread_window_bins,
@@ -113,12 +93,13 @@ async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Train RL Tracking Agent")
     parser.add_argument("--agent", type=str,
-                        choices=["q_learning", "sarsa", "double_q_learning", "linear_fa", "dyna_q"],
-                        default="q_learning", help="Agent type to train")
+                        choices=["double_q_learning", "linear_fa", "dyna_q", "actor_critic"],
+                        default="double_q_learning", help="Agent type to train")
     parser.add_argument("--dataset", type=str,
                         choices=["croatia", "croatia_2507_2", "croatia_2407_1", "croatia_2407_2", "croatia_2307", "scooter"],
                         default="croatia", help="Dataset to train on")
     parser.add_argument("--episodes", type=int, default=150, help="Number of training episodes")
+    parser.add_argument("--max-files", type=int, default=10, help="Maximum number of audio files to process per episode")
     args = parser.parse_args()
 
     _ds_prefix = {
@@ -138,11 +119,10 @@ async def main():
         else f"{policy_dir}/rl_{args.agent}_{args.dataset}.json"
     )
     agent_titles = {
-        "q_learning": "Q-LEARNING",
-        "sarsa": "SARSA (TD-based)",
         "double_q_learning": "DOUBLE Q-LEARNING",
         "linear_fa": "LINEAR FUNCTION APPROXIMATION (Tile Coding)",
         "dyna_q": "DYNA-Q (Planning + Model)",
+        "actor_critic": "ACTOR-CRITIC (Policy Gradient + Value Function)",
     }
     agent_title = agent_titles.get(args.agent, args.agent.upper())
 
@@ -156,31 +136,31 @@ async def main():
         file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2407_2"
     elif args.dataset == "croatia_2307":
         file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2307"
+        min_freq = 40
     else:
         file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2507_1"
+        min_freq = 40
 
-    print("======================================================================")
-    print(f"          STARTING {agent_title} VESSEL TRACKING TRAINING PIPELINE")
-    print("======================================================================\n")
-    print(f"Data Source: {file_dir}")
+    max_freq = 4000
+    n_fft = 16 * 1024
+    hop_length = n_fft // 2
+    
+    env = Environment(file_dir, min_freq, max_freq, n_fft, hop_length, max_files=args.max_files)
 
-    # Hyperparameters
     num_episodes = args.episodes
-    initial_epsilon = 0.4
+    initial_epsilon = 1.0
     min_epsilon = 0.05
     alpha = 0.15
     gamma = 0.85
 
-    if args.agent == "q_learning":
-        policy = QLearningPolicy(alpha=alpha, gamma=gamma)
-    elif args.agent == "sarsa":
-        policy = SarsaPolicy(alpha=alpha, gamma=gamma)
-    elif args.agent == "double_q_learning":
+    if args.agent == "double_q_learning":
         policy = DoubleQLearningPolicy(alpha=alpha, gamma=gamma)
     elif args.agent == "linear_fa":
         policy = LinearFAPolicy(alpha=0.01, gamma=gamma)
     elif args.agent == "dyna_q":
         policy = DynaQPolicy(alpha=alpha, gamma=gamma, n_planning=20)
+    elif args.agent == "actor_critic":
+        policy = ActorCriticPolicy(alpha_actor=0.05, alpha_critic=0.1, gamma=gamma)
     else:
         raise ValueError(f"Unknown agent type: {args.agent}")
 
@@ -196,10 +176,13 @@ async def main():
 
     for ep in range(num_episodes):
         # Linear epsilon decay
-        epsilon = max(min_epsilon, initial_epsilon - (initial_epsilon - min_epsilon) * (ep / (num_episodes - 1)))
+        if num_episodes > 1:
+            epsilon = max(min_epsilon, initial_epsilon - (initial_epsilon - min_epsilon) * (ep / (num_episodes - 1)))
+        else:
+            epsilon = min_epsilon
         print(f"--- Episode {ep+1}/{num_episodes} (Epsilon: {epsilon:.3f}) ---")
         
-        stats = await train_one_episode(ep, rl_agent, epsilon, args.dataset)
+        stats = await train_one_episode(ep, rl_agent, epsilon, env)
         
         # Display episode results
         action_str = ", ".join(f"A{a}: {count}" for a, count in stats.get('action_counts', {}).items())

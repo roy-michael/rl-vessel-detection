@@ -9,7 +9,7 @@ from core.agent import DispatcherAgent, SignalProcessorAgent
 from core.environment import Environment, VesselTrackingRLEnv
 
 # Override by setting the RECORDINGS_DIR environment variable
-BASE_DIR = os.environ.get("RECORDINGS_DIR", "D:/RoyStudies/Recordings")
+BASE_DIR = os.environ.get("RECORDINGS_DIR", "C:/Users/Roy/Recordings")
 
 
 async def main():
@@ -19,8 +19,8 @@ async def main():
                         choices=["croatia", "croatia_2507_2", "croatia_2407_1", "croatia_2407_2", "croatia_2307", "scooter"],
                         default="croatia", help="Dataset to run on")
     parser.add_argument("--rl-agent", type=str,
-                        choices=["q_learning", "sarsa", "double_q_learning", "linear_fa", "dyna_q"],
-                        default="q_learning", help="RL agent policy to use")
+                        choices=["double_q_learning", "linear_fa", "dyna_q", "actor_critic"],
+                        default="double_q_learning", help="RL agent policy to use")
     parser.add_argument("--policy-dataset", type=str,
                         choices=["croatia", "croatia_2507_2", "croatia_2407_1", "croatia_2407_2", "croatia_2307", "scooter"],
                         default="croatia", help="Dataset the policy was trained on")
@@ -106,7 +106,7 @@ async def main():
         
         # Load and integrate trained RL policy
         from core.agent.rl_agent import RLAgent
-        from core.agent.policy import QLearningPolicy, SarsaPolicy, DoubleQLearningPolicy, LinearFAPolicy, DynaQPolicy
+        from core.agent.policy import DoubleQLearningPolicy, LinearFAPolicy, DynaQPolicy, ActorCriticPolicy
         
         _linear_fa = (args.rl_agent == "linear_fa")
         policy_dir = {
@@ -122,16 +122,14 @@ async def main():
             else f"output/{policy_dir}/rl_{args.rl_agent}_{args.policy_dataset}.json"
         )
         if os.path.exists(policy_path):
-            if args.rl_agent == "q_learning":
-                policy = QLearningPolicy()
-            elif args.rl_agent == "sarsa":
-                policy = SarsaPolicy()
-            elif args.rl_agent == "double_q_learning":
+            if args.rl_agent == "double_q_learning":
                 policy = DoubleQLearningPolicy()
             elif args.rl_agent == "linear_fa":
                 policy = LinearFAPolicy()
             elif args.rl_agent == "dyna_q":
                 policy = DynaQPolicy()
+            elif args.rl_agent == "actor_critic":
+                policy = ActorCriticPolicy()
             else:
                 raise ValueError(f"Unknown rl_agent: {args.rl_agent}")
             

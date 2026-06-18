@@ -21,6 +21,7 @@ import re
 import json
 import argparse
 import subprocess
+import concurrent.futures
 
 import numpy as np
 import matplotlib
@@ -36,11 +37,10 @@ from matplotlib.gridspec import GridSpec
 PYTHON = sys.executable
 
 AGENTS = [
-    ("q_learning",        "Q-Learning"),
-    ("sarsa",             "SARSA"),
     ("double_q_learning", "Double Q-Learning"),
     ("linear_fa",         "Linear FA\n(Tile Coding)"),
     ("dyna_q",            "Dyna-Q"),
+    ("actor_critic",      "Actor-Critic"),
 ]
 
 COLORS = {
@@ -49,6 +49,7 @@ COLORS = {
     "double_q_learning": "#27AE60",
     "linear_fa":         "#9B59B6",
     "dyna_q":            "#E74C3C",
+    "actor_critic":      "#F1C40F",
 }
 
 DARK_BG   = "#1a1a2e"
@@ -72,9 +73,18 @@ DATASET_LABELS = {
 # Subprocess helper
 # ---------------------------------------------------------------------------
 
-def run_step(cmd: list, cwd: str) -> tuple:
-    result = subprocess.run(cmd, capture_output=True, text=True, cwd=cwd)
-    return result.returncode, result.stdout, result.stderr
+def run_step(cmd: list, cwd: str, prefix: str = "") -> tuple:
+    env = dict(os.environ, PYTHONUNBUFFERED="1")
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=cwd, env=env)
+    out_lines = []
+    for line in process.stdout:
+        out_lines.append(line)
+        if "Episode" in line or "Processing file" in line or "Evaluating" in line:
+            # Add a carriage return and end="" to allow for dynamic progress updating if needed,
+            # or just print normally. We print normally here to ensure visibility in concurrent runs.
+            print(f"{prefix} {line.strip()}", flush=True)
+    process.wait()
+    return process.returncode, "".join(out_lines), ""
 
 
 # ---------------------------------------------------------------------------
@@ -441,11 +451,10 @@ def write_markdown_report(agent_ids, agent_labels, all_metrics, all_vessels,
         "",
         "| Agent | Course Lesson | Key Mechanism |",
         "| :--- | :--- | :--- |",
-        "| **Q-Learning** | Lesson 5 | Off-policy tabular TD — updates with `max Q(s',a')` regardless of policy |",
-        "| **SARSA** | Lesson 5 | On-policy tabular TD — updates with `Q(s', a')` under the *actual* next action |",
         "| **Double Q-Learning** | Lesson 5 ext. | Two Q-tables decouple action *selection* from *evaluation*, removing maximisation bias |",
         "| **Linear FA (Tile Coding)** | Lesson 6 | Continuous state → 2,048-dim tile-coded feature vector; weight vector `w` per action |",
         "| **Dyna-Q** | Lesson 7 | Q-Learning + 20 simulated planning steps per real step using a learned transition model |",
+        "| **Actor-Critic** | Custom | Policy Gradient + Value Function estimation with Softmax action selection |",
         "",
         "---",
         "",
@@ -476,6 +485,10 @@ def main():
                         help="Reuse existing policy files, skip training")
     parser.add_argument("--episodes", type=int, default=150,
                         help="Number of episodes per agent training run")
+    parser.add_argument("--max-workers", type=int, default=4,
+                        help="Number of parallel workers for evaluation/training")
+    parser.add_argument("--max-files", type=int, default=None,
+                        help="Limit max files per dataset evaluation/training")
     args = parser.parse_args()
 
     cwd = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -489,14 +502,24 @@ def main():
     # Step 1: Training
     # -----------------------------------------------------------------------
     if not args.skip_training:
-        for aid in agent_ids:
+        def train_agent(aid):
             cmd = [PYTHON, "-m", "scripts.train_rl", "--agent", aid, "--dataset", args.train_dataset, "--episodes", str(args.episodes)]
-            print(f"\n{'='*60}\n  TRAINING: {aid} on {args.train_dataset}\n{'='*60}")
-            rc, out, err = run_step(cmd, cwd)
-            print(out[-3000:] if len(out) > 3000 else out)
-            if rc != 0:
-                print(f"[ERROR] {err[-500:]}")
-            episode_rewards[aid] = parse_episode_rewards(out)
+            if args.max_files is not None:
+                cmd.extend(["--max-files", str(args.max_files)])
+            rc, out, err = run_step(cmd, cwd, prefix=f"[{aid}]")
+            return aid, rc, out, err
+
+        print(f"\n{'='*60}\n  TRAINING ALL AGENTS ON {args.train_dataset} (PARALLEL)\n{'='*60}")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+            futures = {executor.submit(train_agent, aid): aid for aid in agent_ids}
+            for future in concurrent.futures.as_completed(futures):
+                _aid, rc, out, err = future.result()
+                aid = _aid
+                print(f"\n--- Training completed for {aid} ---")
+                print(out[-3000:] if len(out) > 3000 else out)
+                if rc != 0:
+                    print(f"[ERROR] {err[-500:]}")
+                episode_rewards[aid] = parse_episode_rewards(out)
 
         # Generate dedicated comparative convergence plots (both combined and individual grid)
         train_prefix = DS_PREFIX.get(args.train_dataset, args.train_dataset)
@@ -560,7 +583,7 @@ def main():
         print(f"{'#'*70}")
 
         # Evaluate all agents on this dataset
-        for aid in agent_ids:
+        def eval_agent(aid):
             cmd = [
                 PYTHON, "vessel_tracker_rl.py",
                 "--rl-agent", aid,
@@ -568,11 +591,28 @@ def main():
                 "--dataset", eval_ds,
                 "--headless",
             ]
-            print(f"\n  -- Evaluating {aid} --")
-            rc, out, err = run_step(cmd, cwd)
-            print(out[-1500:] if len(out) > 1500 else out)
-            if rc != 0:
-                print(f"  [ERROR] {err[-400:]}")
+            if args.max_files is not None:
+                cmd.extend(["--max-files", str(args.max_files)])
+            rp = os.path.join(cwd, report_path_for(aid, eval_ds))
+            if os.path.exists(rp):
+                return aid, True, 0, "", ""
+            else:
+                rc, out, err = run_step(cmd, cwd, prefix=f"[{aid}]")
+                return aid, False, rc, out, err
+
+        print("  Evaluating agents in parallel...")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
+            futures = {executor.submit(eval_agent, aid): aid for aid in agent_ids}
+            for future in concurrent.futures.as_completed(futures):
+                aid = futures[future]
+                aid, skipped, rc, out, err = future.result()
+                if skipped:
+                    print(f"\n  -- Skipping {aid} evaluation (report exists) --")
+                else:
+                    print(f"\n  -- Completed {aid} --")
+                    print(out[-1500:] if len(out) > 1500 else out)
+                    if rc != 0:
+                        print(f"  [ERROR] {err[-400:]}")
 
         # Parse results
         all_metrics = []

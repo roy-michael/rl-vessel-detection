@@ -70,6 +70,9 @@ class Environment:
         self.global_max = 1e-6
 
     async def _read_files_loop_fft(self):
+        cache_dir = os.path.join(self.file_dir, ".stft_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+
         while self.file_index < len(self.wav_files):
             async with self.buffer_lock:
                 buffer_size = len(self.chunk_buffer)
@@ -80,16 +83,26 @@ class Environment:
                 continue
 
             file_path = self.wav_files[self.file_index]
+            base_name = os.path.basename(file_path)
+            cache_file = os.path.join(cache_dir, f"{base_name}_{self.n_fft}_{self.fft_hop_length}.npy")
 
             try:
-                # Load the entire audio file into memory using fast soundfile read
-                data, _ = await asyncio.to_thread(sf.read, file_path, dtype='float32')
-                if len(data.shape) > 1:
-                    y = np.mean(data, axis=1)
+                if os.path.exists(cache_file):
+                    fft = await asyncio.to_thread(np.load, cache_file)
                 else:
-                    y = data
-                # Perform STFT on the whole file
-                fft = librosa.stft(y, n_fft=self.n_fft, hop_length=self.fft_hop_length)
+                    # Load the entire audio file into memory using fast soundfile read
+                    data, _ = await asyncio.to_thread(sf.read, file_path, dtype='float32')
+                    if len(data.shape) > 1:
+                        y = np.mean(data, axis=1)
+                    else:
+                        y = data
+                    # Perform STFT on the whole file
+                    fft = librosa.stft(y, n_fft=self.n_fft, hop_length=self.fft_hop_length)
+                    
+                    # Cache it safely
+                    tmp_file = cache_file.replace(".npy", "_tmp.npy")
+                    await asyncio.to_thread(np.save, tmp_file, fft)
+                    os.replace(tmp_file, cache_file)
 
                 async with self.buffer_lock:
                     # Extend the buffer with all frames (columns) from the STFT, transposed
@@ -107,6 +120,12 @@ class Environment:
     async def start(self):
         # Start background reading task
         asyncio.create_task(self._read_files_loop_fft())
+
+    def reset(self):
+        self.file_index = 0
+        self.reading = True
+        self.chunk_buffer.clear()
+        self.data_available.clear()
 
     async def get_buffer_status(self):
         async with self.buffer_lock:
