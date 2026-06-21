@@ -25,8 +25,8 @@ rl-vessel-detection/
 ├── scripts/                 # Pipeline and utility scripts
 │   ├── train_rl.py          #   Train a single RL agent
 │   ├── compare_rl_agents.py #   End-to-end train → eval → report for all agents
-│   ├── visualize_rl_results.py  #  Training curve visualisation
-│   └── generate_lofar_spectrograms.py  # LOFAR spectrogram generation
+│   ├── generate_lofar_spectrograms.py  # LOFAR spectrogram generation
+│   └── generate_mel_spectrograms.py    # Mel spectrogram generation
 ├── analysis/                # Named analysis and plotting scripts
 │   ├── calculate_segment_distance.py
 │   ├── compare_datasets.py
@@ -45,12 +45,11 @@ rl-vessel-detection/
 │   └── generate_test_audio.py
 ├── output/                  # Generated PNGs, CSVs, TXTs (gitignored)
 ├── vessel_tracker_rl.py     # Primary entry point (RL agent pipeline)
-├── vessel_denoiser_nmf.py   # Alternative entry point (denoising NMF pipeline)
 ├── requirements.txt
 └── README.md
 ```
 
-> **Configuration**: Set the `RECORDINGS_DIR` environment variable to point to your local recordings root (default: `c:/Users/Roy/Recordings` for `vessel_tracker_rl.py` / `D:/RoyStudies/Recordings` for `vessel_denoiser_nmf.py`).
+> **Configuration**: Set the `RECORDINGS_DIR` environment variable to point to your local recordings root (default: `c:/Users/Roy/Recordings`).
 
 ---
 

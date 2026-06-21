@@ -5,9 +5,14 @@ import librosa
 import numpy as np
 import matplotlib.pyplot as plt
 
-BASE_DIR = os.environ.get("RECORDINGS_DIR", "D:/RoyStudies/Recordings")
+BASE_DIR = os.environ.get("RECORDINGS_DIR", "C:/Users/Roy/Recordings")
 datasets = {
-    "croatia_2507_1": f"{BASE_DIR}/Croatia/Ocean Sonics/2507_1"
+    "croatia_2307": f"{BASE_DIR}/Croatia/Ocean Sonics/2307_free",
+    "croatia_2407_1": f"{BASE_DIR}/Croatia/Ocean Sonics/2407_1_600m",
+    "croatia_2407_2": f"{BASE_DIR}/Croatia/Ocean Sonics/2407_2_snake",
+    "croatia_2507_1": f"{BASE_DIR}/Croatia/Ocean Sonics/2507_1_1k",
+    "croatia_2507_2": f"{BASE_DIR}/Croatia/Ocean Sonics/2507_2_joint",
+    "scooter": f"{BASE_DIR}/DepartmentalCruise-2025-06-12/icListen/wav"
 }
 
 # Dark aesthetics matching premium design theme
@@ -174,6 +179,9 @@ def generate_mel(dataset_name, file_dir):
     setup_plot_style()
     fig, ax = plt.subplots(figsize=(15, 7.5))
     
+    vmax_val = np.percentile(plot_data, 95.0)
+    vmin_val = np.percentile(plot_data, 5.0)
+    
     # Plot using a beautiful inferno color map
     im = ax.imshow(
         plot_data,
@@ -181,22 +189,23 @@ def generate_mel(dataset_name, file_dir):
         origin="lower",
         extent=[0, total_duration / 60.0, 0, n_mels - 1],
         cmap="inferno",
-        vmin=-80,
-        vmax=0
+        vmin=vmin_val,
+        vmax=vmax_val
     )
     
     # Overlay metadata events on the spectrogram
-    for note in metadata_notes:
-        ax.axvspan(note["start"], note["end"], color="cyan", alpha=0.12, edgecolor="cyan", linestyle="--", linewidth=1.0)
-        # Draw a vertical marker line at start and end
-        ax.axvline(note["start"], color="cyan", alpha=0.4, linestyle=":", linewidth=1.2)
-        ax.axvline(note["end"], color="cyan", alpha=0.4, linestyle=":", linewidth=1.2)
-        
-        # Add a text label above the spectrogram panel or near the top
-        mid_point = (note["start"] + note["end"]) / 2.0
-        ax.text(mid_point, n_mels * 0.88, f"{note['label']}\n({note['cest_str']} Local)",
-                color="cyan", fontsize=8.5, fontweight="bold", ha="center", va="top",
-                bbox=dict(boxstyle="round,pad=0.3", fc="#16213e", ec="cyan", alpha=0.75))
+    # (Removed per user request)
+    # for note in metadata_notes:
+    #     ax.axvspan(note["start"], note["end"], color="cyan", alpha=0.12, edgecolor="cyan", linestyle="--", linewidth=1.0)
+    #     # Draw a vertical marker line at start and end
+    #     ax.axvline(note["start"], color="cyan", alpha=0.4, linestyle=":", linewidth=1.2)
+    #     ax.axvline(note["end"], color="cyan", alpha=0.4, linestyle=":", linewidth=1.2)
+    #     
+    #     # Add a text label above the spectrogram panel or near the top
+    #     mid_point = (note["start"] + note["end"]) / 2.0
+    #     ax.text(mid_point, n_mels * 0.88, f"{note['label']}\n({note['cest_str']} Local)",
+    #             color="cyan", fontsize=8.5, fontweight="bold", ha="center", va="top",
+    #             bbox=dict(boxstyle="round,pad=0.3", fc="#16213e", ec="cyan", alpha=0.75))
 
     # Set custom Mel-spaced frequency ticks on y-axis
     freq_ticks = [100, 250, 500, 1000, 1500, 2000, 3000, 4000]

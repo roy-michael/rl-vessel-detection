@@ -62,13 +62,13 @@ async def main():
         file_dir = f"{croatia_base_dir}/2407_2"
         report_filename = f"croatia_2407_2_{args.rl_agent}_report.txt"
         img_filename = f"croatia_2407_2_{args.rl_agent}_timeline.png"
-        min_freq = 40
+        min_freq = 400
     elif args.dataset == "croatia_2307":
         croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
         file_dir = f"{croatia_base_dir}/2307"
         report_filename = f"croatia_2307_{args.rl_agent}_report.txt"
         img_filename = f"croatia_2307_{args.rl_agent}_timeline.png"
-        min_freq = 40
+        min_freq = 400
     else:
         croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
         file_dir = f"{croatia_base_dir}/2507_1"
