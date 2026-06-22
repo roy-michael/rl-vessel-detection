@@ -39,7 +39,6 @@ PYTHON = sys.executable
 AGENTS = [
     ("double_q_learning", "Double Q-Learning"),
     ("linear_fa",         "Linear FA\n(Tile Coding)"),
-    ("dyna_q",            "Dyna-Q"),
     ("actor_critic",      "Actor-Critic"),
 ]
 
@@ -550,7 +549,7 @@ def main():
         plt.close(fig_comb)
         
         # 2. Individual Subplots Grid
-        fig_indiv, axes = plt.subplots(3, 2, figsize=(15, 18))
+        fig_indiv, axes = plt.subplots(2, 2, figsize=(15, 12))
         fig_indiv.patch.set_facecolor('#1a1a2e')
         axes_flat = axes.flatten()
         for idx, (aid, label) in enumerate(zip(agent_ids, agent_labels)):
@@ -564,7 +563,7 @@ def main():
             ax.set_ylabel("Cumulative Reward", fontsize=9)
             ax.grid(True, color='#2d2d4e', linestyle='--', alpha=0.5)
             ax.tick_params(colors='#e0e0e0', labelsize=8)
-        axes_flat[5].axis('off')
+        axes_flat[3].axis('off')
         plt.suptitle(f"Individual RL Agent Convergence Curves ({args.train_dataset.upper()})", fontsize=16, fontweight='bold', y=0.98, color='#e0e0e0')
         plt.tight_layout(rect=[0, 0, 1, 0.95])
         fig_indiv.savefig(os.path.join(train_out_dir, "convergence_individual.png"), dpi=300, bbox_inches='tight', facecolor=fig_indiv.get_facecolor())

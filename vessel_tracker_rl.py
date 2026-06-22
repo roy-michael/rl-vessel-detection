@@ -19,7 +19,7 @@ async def main():
                         choices=["croatia", "croatia_2507_2", "croatia_2407_1", "croatia_2407_2", "croatia_2307", "scooter"],
                         default="croatia", help="Dataset to run on")
     parser.add_argument("--rl-agent", type=str,
-                        choices=["double_q_learning", "linear_fa", "dyna_q", "actor_critic"],
+                        choices=["double_q_learning", "linear_fa", "actor_critic"],
                         default="double_q_learning", help="RL agent policy to use")
     parser.add_argument("--policy-dataset", type=str,
                         choices=["croatia", "croatia_2507_2", "croatia_2407_1", "croatia_2407_2", "croatia_2307", "scooter"],
@@ -47,31 +47,31 @@ async def main():
         min_freq = 400
     elif args.dataset == "croatia_2507_2":
         croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
-        file_dir = f"{croatia_base_dir}/2507_2"
+        file_dir = f"{croatia_base_dir}/2507_2_joint"
         report_filename = f"croatia_2507_2_{args.rl_agent}_report.txt"
         img_filename = f"croatia_2507_2_{args.rl_agent}_timeline.png"
         min_freq = 40
     elif args.dataset == "croatia_2407_1":
         croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
-        file_dir = f"{croatia_base_dir}/2407_1"
+        file_dir = f"{croatia_base_dir}/2407_1_600m"
         report_filename = f"croatia_2407_1_{args.rl_agent}_report.txt"
         img_filename = f"croatia_2407_1_{args.rl_agent}_timeline.png"
         min_freq = 40
     elif args.dataset == "croatia_2407_2":
         croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
-        file_dir = f"{croatia_base_dir}/2407_2"
+        file_dir = f"{croatia_base_dir}/2407_2_snake"
         report_filename = f"croatia_2407_2_{args.rl_agent}_report.txt"
         img_filename = f"croatia_2407_2_{args.rl_agent}_timeline.png"
         min_freq = 400
     elif args.dataset == "croatia_2307":
         croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
-        file_dir = f"{croatia_base_dir}/2307"
+        file_dir = f"{croatia_base_dir}/2307_free"
         report_filename = f"croatia_2307_{args.rl_agent}_report.txt"
         img_filename = f"croatia_2307_{args.rl_agent}_timeline.png"
         min_freq = 400
     else:
         croatia_base_dir = f"{BASE_DIR}/Croatia/Ocean Sonics"
-        file_dir = f"{croatia_base_dir}/2507_1"
+        file_dir = f"{croatia_base_dir}/2507_1_1k"
         report_filename = f"croatia_2507_1_{args.rl_agent}_report.txt"
         img_filename = f"croatia_2507_1_{args.rl_agent}_timeline.png"
         min_freq = 40
@@ -102,11 +102,13 @@ async def main():
             min_duration_sec=45.0,
             min_vessel_score=0.50
         )
+        agent.dataset_name = args.dataset
+        agent.policy_name = args.rl_agent
         signal_processor = agent
         
         # Load and integrate trained RL policy
         from core.agent.rl_agent import RLAgent
-        from core.agent.policy import DoubleQLearningPolicy, LinearFAPolicy, DynaQPolicy, ActorCriticPolicy
+        from core.agent.policy import DoubleQLearningPolicy, LinearFAPolicy, ActorCriticPolicy
         
         _linear_fa = (args.rl_agent == "linear_fa")
         policy_dir = {
@@ -126,8 +128,6 @@ async def main():
                 policy = DoubleQLearningPolicy()
             elif args.rl_agent == "linear_fa":
                 policy = LinearFAPolicy()
-            elif args.rl_agent == "dyna_q":
-                policy = DynaQPolicy()
             elif args.rl_agent == "actor_critic":
                 policy = ActorCriticPolicy()
             else:
@@ -310,6 +310,7 @@ async def main():
             elif agent:
                 print("Generating and saving final vessel timeline plot...")
                 fig_new, ax_new = plt.subplots(figsize=(12, 6))
+                fig_new.subplots_adjust(left=0.08, right=0.80)
                 agent.fig = fig_new
                 agent.ax_track = ax_new
                 agent.ax_kde = ax_new.twiny()
@@ -433,83 +434,83 @@ async def main():
                 filtered_dets = [d for d in raw_detections if 0.0 <= d[0] <= 2500.0]
                 if not filtered_dets:
                     print("No detections in 0-2500 Hz range for joint histogram.")
-                    return
-                freqs_det = [d[0] for d in filtered_dets]
-                amps_det = [d[1] for d in filtered_dets]
-                
-                DARK_BG   = "#1a1a2e"
-                PANEL_BG  = "#16213e"
-                TEXT_COL  = "#e0e0e0"
-                GRID_COL  = "#3a3a5e"
-                
-                # Plotting a beautiful joint histogram
-                fig_joint = plt.figure(figsize=(10, 10), facecolor=DARK_BG)
-                gs = plt.GridSpec(4, 5, hspace=0.15, wspace=0.15,
-                                  width_ratios=[1, 1, 1, 0.6, 0.25],
-                                  height_ratios=[0.6, 1, 1, 1])
-                
-                # Main 2D density/hist plot
-                ax_joint = fig_joint.add_subplot(gs[1:4, 0:3], facecolor=PANEL_BG)
-                # Marginal histograms
-                ax_marg_x = fig_joint.add_subplot(gs[0, 0:3], sharex=ax_joint, facecolor=PANEL_BG)
-                ax_marg_y = fig_joint.add_subplot(gs[1:4, 3], sharey=ax_joint, facecolor=PANEL_BG)
-                cbar_ax = fig_joint.add_subplot(gs[1:4, 4])
-                
-                # Define y-axis upper limit using a robust percentile to filter out extreme amplitude outliers
-                if len(amps_det) > 10:
-                    q99 = np.percentile(amps_det, 99.0)
-                    max_amp = q99 if q99 > 0 else max(amps_det)
                 else:
-                    max_amp = max(amps_det) if amps_det else 1.0
-                
-                if max_amp <= 0:
-                    max_amp = 1.0
-                
-                # Plot hexbin on main axis restricted to the 0-2500 Hz and 0-max_amp range
-                hb = ax_joint.hexbin(freqs_det, amps_det, gridsize=40, cmap="inferno", mincnt=1, edgecolors='none', extent=[0, 2500, 0, max_amp])
-                
-                # Set axis limits
-                ax_joint.set_xlim(0, 2500)
-                ax_joint.set_ylim(0, max_amp * 1.05)
-                
-                # Set axis labels with units
-                ax_joint.set_xlabel("Frequency (Hz)", fontsize=10, fontweight="bold", color=TEXT_COL)
-                ax_joint.set_ylabel("Amplitude (relative units)", fontsize=10, fontweight="bold", color=TEXT_COL)
-                ax_joint.tick_params(colors=TEXT_COL, labelsize=9)
-                
-                # Configure grid ticks and subdivisions (rulers)
-                import matplotlib.ticker as ticker
-                # Frequency ruler (x-axis): major ticks every 500 Hz, minor every 100 Hz to prevent overlap
-                ax_joint.xaxis.set_major_locator(ticker.MultipleLocator(500))
-                ax_joint.xaxis.set_minor_locator(ticker.MultipleLocator(100))
-                
-                # Amplitude ruler (y-axis): reduce scale density using MaxNLocator (max 5 ticks) to show clearly
-                ax_joint.yaxis.set_major_locator(ticker.MaxNLocator(nbins=5))
-                ax_joint.yaxis.set_minor_locator(ticker.AutoMinorLocator(2))
-                
-                ax_joint.grid(True, which='major', linestyle="--", alpha=0.4, color=GRID_COL)
-                ax_joint.grid(True, which='minor', linestyle=":", alpha=0.2, color=GRID_COL)
-                
-                # Plot marginal x (frequency) hist
-                ax_marg_x.hist(freqs_det, bins=80, range=(0, 2500), color="#4A90D9", edgecolor="none", alpha=0.8)
-                ax_marg_x.axis('off')
-                
-                # Plot marginal y (amplitude) hist
-                ax_marg_y.hist(amps_det, bins=80, range=(0, max_amp), orientation='horizontal', color="#E67E22", edgecolor="none", alpha=0.8)
-                ax_marg_y.axis('off')
-                
-                # Add vertical colorbar on the right
-                cb = fig_joint.colorbar(hb, cax=cbar_ax, orientation='vertical')
-                cb.set_label("Detection Density (Count)", color=TEXT_COL, fontsize=9, labelpad=10)
-                cb.ax.tick_params(colors=TEXT_COL, labelsize=8)
-                
-                fig_joint.suptitle(f"Joint Frequency & Amplitude Distribution — {args.dataset.replace('_', ' ').upper()}", 
-                                   color=TEXT_COL, fontsize=12, fontweight="bold", y=0.95)
-                
-                joint_hist_path = os.path.join(out_dir, f"joint_histogram_{_ds_prefix}.png")
-                fig_joint.savefig(joint_hist_path, bbox_inches="tight", dpi=180, facecolor=DARK_BG)
-                plt.close(fig_joint)
-                print(f"Saved joint histogram to {joint_hist_path}")
+                    freqs_det = [d[0] for d in filtered_dets]
+                    amps_det = [d[1] for d in filtered_dets]
+                    
+                    DARK_BG   = "#1a1a2e"
+                    PANEL_BG  = "#16213e"
+                    TEXT_COL  = "#e0e0e0"
+                    GRID_COL  = "#3a3a5e"
+                    
+                    # Plotting a beautiful joint histogram
+                    fig_joint = plt.figure(figsize=(10, 10), facecolor=DARK_BG)
+                    gs = plt.GridSpec(4, 5, hspace=0.15, wspace=0.15,
+                                      width_ratios=[1, 1, 1, 0.6, 0.25],
+                                      height_ratios=[0.6, 1, 1, 1])
+                    
+                    # Main 2D density/hist plot
+                    ax_joint = fig_joint.add_subplot(gs[1:4, 0:3], facecolor=PANEL_BG)
+                    # Marginal histograms
+                    ax_marg_x = fig_joint.add_subplot(gs[0, 0:3], sharex=ax_joint, facecolor=PANEL_BG)
+                    ax_marg_y = fig_joint.add_subplot(gs[1:4, 3], sharey=ax_joint, facecolor=PANEL_BG)
+                    cbar_ax = fig_joint.add_subplot(gs[1:4, 4])
+                    
+                    # Define y-axis upper limit using a robust percentile to filter out extreme amplitude outliers
+                    if len(amps_det) > 10:
+                        q99 = np.percentile(amps_det, 99.0)
+                        max_amp = q99 if q99 > 0 else max(amps_det)
+                    else:
+                        max_amp = max(amps_det) if amps_det else 1.0
+                    
+                    if max_amp <= 0:
+                        max_amp = 1.0
+                    
+                    # Plot hexbin on main axis restricted to the 0-2500 Hz and 0-max_amp range
+                    hb = ax_joint.hexbin(freqs_det, amps_det, gridsize=40, cmap="inferno", mincnt=1, edgecolors='none', extent=[0, 2500, 0, max_amp])
+                    
+                    # Set axis limits
+                    ax_joint.set_xlim(0, 2500)
+                    ax_joint.set_ylim(0, max_amp * 1.05)
+                    
+                    # Set axis labels with units
+                    ax_joint.set_xlabel("Frequency (Hz)", fontsize=10, fontweight="bold", color=TEXT_COL)
+                    ax_joint.set_ylabel("Amplitude (relative units)", fontsize=10, fontweight="bold", color=TEXT_COL)
+                    ax_joint.tick_params(colors=TEXT_COL, labelsize=9)
+                    
+                    # Configure grid ticks and subdivisions (rulers)
+                    import matplotlib.ticker as ticker
+                    # Frequency ruler (x-axis): major ticks every 500 Hz, minor every 100 Hz to prevent overlap
+                    ax_joint.xaxis.set_major_locator(ticker.MultipleLocator(500))
+                    ax_joint.xaxis.set_minor_locator(ticker.MultipleLocator(100))
+                    
+                    # Amplitude ruler (y-axis): reduce scale density using MaxNLocator (max 5 ticks) to show clearly
+                    ax_joint.yaxis.set_major_locator(ticker.MaxNLocator(nbins=5))
+                    ax_joint.yaxis.set_minor_locator(ticker.AutoMinorLocator(2))
+                    
+                    ax_joint.grid(True, which='major', linestyle="--", alpha=0.4, color=GRID_COL)
+                    ax_joint.grid(True, which='minor', linestyle=":", alpha=0.2, color=GRID_COL)
+                    
+                    # Plot marginal x (frequency) hist
+                    ax_marg_x.hist(freqs_det, bins=80, range=(0, 2500), color="#4A90D9", edgecolor="none", alpha=0.8)
+                    ax_marg_x.axis('off')
+                    
+                    # Plot marginal y (amplitude) hist
+                    ax_marg_y.hist(amps_det, bins=80, range=(0, max_amp), orientation='horizontal', color="#E67E22", edgecolor="none", alpha=0.8)
+                    ax_marg_y.axis('off')
+                    
+                    # Add vertical colorbar on the right
+                    cb = fig_joint.colorbar(hb, cax=cbar_ax, orientation='vertical')
+                    cb.set_label("Detection Density (Count)", color=TEXT_COL, fontsize=9, labelpad=10)
+                    cb.ax.tick_params(colors=TEXT_COL, labelsize=8)
+                    
+                    fig_joint.suptitle(f"Joint Frequency & Amplitude Distribution — {args.dataset.replace('_', ' ').upper()}", 
+                                       color=TEXT_COL, fontsize=12, fontweight="bold", y=0.95)
+                    
+                    joint_hist_path = os.path.join(out_dir, f"joint_histogram_{_ds_prefix}.png")
+                    fig_joint.savefig(joint_hist_path, bbox_inches="tight", dpi=180, facecolor=DARK_BG)
+                    plt.close(fig_joint)
+                    print(f"Saved joint histogram to {joint_hist_path}")
             except Exception as e:
                 print(f"Could not generate joint histogram: {e}")
 

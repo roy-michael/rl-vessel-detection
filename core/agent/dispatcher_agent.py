@@ -97,7 +97,7 @@ class DispatcherAgent:
         if self.spec_sub_kernel < 3:
             self.spec_sub_kernel = 3
             
-        self.temporal_noise_subtraction_factor = 0.5
+        self.temporal_noise_subtraction_factor = 0.8
         self.completed = False
 
         # --- Analysis Thresholds & Settings ---
@@ -163,33 +163,27 @@ class DispatcherAgent:
 
         plt.ion()
         
-        self.fig, (self.ax_spec, self.ax_nmf, self.ax_track, self.ax_amp) = plt.subplots(
-            4, 1, 
-            figsize=(12, 14),
-            gridspec_kw={'height_ratios': [3, 2, 2, 2]}
+        self.fig, (self.ax_spec, self.ax_nmf, self.ax_track) = plt.subplots(
+            3, 1, 
+            figsize=(12, 11),
+            gridspec_kw={'height_ratios': [3, 2, 2]}
         )
-        self.fig.subplots_adjust(hspace=0.6)
+        self.fig.subplots_adjust(left=0.08, right=0.80, hspace=0.6)
         
         # Tracker visualization setup
         self.ax_kde = self.ax_track.twiny()
         self.ax_track.set_xlim(0, 15.0)
-        self.ax_track.set_ylim(self.min_freq, self.max_freq)
+        self.ax_track.set_ylim(self.min_freq, min(2500, self.max_freq))
         self.ax_track.set_xlabel("Absolute Time (seconds)")
         self.ax_track.set_ylabel("Frequency (Hz)")
-        self.ax_track.set_title("Vessel Speed States Timeline")
+        dataset_lbl = getattr(self, 'dataset_name', 'Unknown')
+        policy_lbl = getattr(self, 'policy_name', 'Unknown')
+        self.ax_track.set_title(f"Vessel Speed States Timeline | Dataset: {dataset_lbl} | Policy: {policy_lbl}", pad=35)
         self.ax_track.grid(True, linestyle="--", alpha=0.5)
 
         self.ax_kde.set_xlim(0, 1.1)
         self.ax_kde.set_xlabel("Probability Density (KDE)", color="purple")
         self.ax_kde.tick_params(axis='x', colors="purple")
-
-        # Amplitude visualization setup
-        self.ax_amp.set_xlim(0, 15.0)
-        self.ax_amp.set_ylim(0, 1.0)
-        self.ax_amp.set_xlabel("Absolute Time (seconds)")
-        self.ax_amp.set_ylabel("Signal Amplitude (Activation)")
-        self.ax_amp.set_title("Vessel Signal Amplitude Timeline")
-        self.ax_amp.grid(True, linestyle="--", alpha=0.5)
         
         self.xaxis_extent = [-self.window_sec, 0]
 
@@ -203,19 +197,20 @@ class DispatcherAgent:
 
         extent = [self.xaxis_extent[0], self.xaxis_extent[1], self._env.freqs_plot[0], self._env.freqs_plot[-1]]
         self.img = self.ax_spec.imshow(self.S_buffer, aspect='auto', origin='lower', 
-                        cmap='magma', extent=extent, vmin=-80, vmax=0)
+                        cmap='magma', extent=extent, vmin=-60, vmax=0)
         self.ax_spec.set_xlim(self.xaxis_extent)
         self.title = self.ax_spec.set_title("Live Spectrogram")
         self.ax_spec.set_xlabel("Time (s, relative to now)")
         self.ax_spec.set_ylabel("Frequency (Hz)")
-        self.fig.colorbar(self.img, ax=self.ax_spec, format="%+2.0f dB")
+        cbar_ax = self.fig.add_axes([0.84, 0.65, 0.02, 0.25])
+        self.fig.colorbar(self.img, cax=cbar_ax, format="%+2.0f dB")
 
         self.lines_nmf = []
         nmf_x_axis = self._env.freqs_plot
         for i in range(self.n_components):
-            line, = self.ax_nmf.plot(nmf_x_axis, np.zeros(num_freq_bins), label=f'C{i+1}')
+            line, = self.ax_nmf.plot(nmf_x_axis, np.zeros(num_freq_bins), label=f'C{i+1}', linewidth=0.75)
             self.lines_nmf.append(line)
-        self.ax_nmf.legend(loc='upper right')
+        self.ax_nmf.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
         self.ax_nmf.set_title('NMF Components weighted by Current Activation')
         self.ax_nmf.set_xlabel("Frequency (Hz)")
         self.ax_nmf.set_ylabel('Weighted Magnitude')
@@ -762,10 +757,12 @@ class DispatcherAgent:
             self.ax_amp.clear()
 
         self.ax_track.grid(True, linestyle="--", alpha=0.5)
-        self.ax_track.set_ylim(self.min_freq, self.max_freq)
+        self.ax_track.set_ylim(self.min_freq, min(2500, self.max_freq))
         self.ax_track.set_xlabel("Real Time (HH:MM:SS)")
         self.ax_track.set_ylabel("Frequency (Hz)")
-        self.ax_track.set_title("Vessel Speed States Timeline")
+        dataset_lbl = getattr(self, 'dataset_name', 'Unknown')
+        policy_lbl = getattr(self, 'policy_name', 'Unknown')
+        self.ax_track.set_title(f"Vessel Speed States Timeline | Dataset: {dataset_lbl} | Policy: {policy_lbl}", pad=35)
 
         all_states = list(self.states)
         for p in self.active_processors:
@@ -818,10 +815,9 @@ class DispatcherAgent:
                 std_f = np.sqrt(scaled_variance)
                 
                 t_seg = np.linspace(start_t, end_t, len(state.amplitudes)) if len(state.amplitudes) > 1 else np.array([start_t])
-                
                 if meta['is_dominant']:
                     linestyle = "--" if is_active else "-"
-                    linewidth = 3.5
+                    linewidth = 1.5
                     alpha_val = 0.95
                     
                     self.ax_track.fill_between(
@@ -859,7 +855,7 @@ class DispatcherAgent:
                             t_seg, state.amplitudes,
                             color=color, linestyle="-", linewidth=1.0, alpha=0.25
                         )
-
+ 
             if meta['is_dominant'] and len(sorted_segs) > 1:
                 for j in range(len(sorted_segs) - 1):
                     segA = sorted_segs[j]
@@ -873,7 +869,7 @@ class DispatcherAgent:
                     
                     self.ax_track.plot(
                         [endA_t, startB_t], [meanA_f, meanB_f],
-                        color=color, linestyle=":", linewidth=2.0, alpha=0.7
+                        color=color, linestyle=":", linewidth=1.0, alpha=0.7
                     )
 
         self.ax_track.axvline(self.current_time, color="red", linestyle="--", linewidth=1.0)
@@ -952,7 +948,7 @@ class DispatcherAgent:
                 else:
                     self.ax_track.scatter(times_bad, freqs_bad, color="magenta", s=35, alpha=0.9, marker="s", label="Bad Association")
 
-        self.ax_track.legend(loc="upper left", fontsize=7, framealpha=0.6)
+        self.ax_track.legend(loc="upper left", bbox_to_anchor=(1.05, 1), fontsize=7, framealpha=0.6)
 
         if len(vessel_kde_data) > 3:
             try:
@@ -960,7 +956,7 @@ class DispatcherAgent:
                 freq_vals = [pt[0] for pt in vessel_kde_data]
                 kde = gaussian_kde(freq_vals, bw_method=0.1)
                 
-                y_grid = np.linspace(self.min_freq, self.max_freq, 500)
+                y_grid = np.linspace(self.min_freq, min(2500, self.max_freq), 500)
                 density = kde(y_grid)
                 
                 max_d = np.max(density)
@@ -993,7 +989,7 @@ class DispatcherAgent:
             # Stage 1: Spectral Median Filtering
             broadband_noise_floor = median_filter(magnitude_frame, size=self.spec_sub_kernel)
             
-            denoised_magnitude = magnitude_frame - 1.2 * broadband_noise_floor
+            denoised_magnitude = magnitude_frame - 1.5 * broadband_noise_floor
             denoised_magnitude = np.maximum(denoised_magnitude, 0.03 * broadband_noise_floor)
             denoised_magnitude = np.maximum(denoised_magnitude, 1e-6)
             
@@ -1031,7 +1027,7 @@ class DispatcherAgent:
             self.activations_buffer[:, -1] = current_activations.flatten()
             
             # Convert to Decibels for visualization
-            db_frame = self._to_decibels(self.smoothed_magnitude)
+            db_frame = self._to_decibels(self.smoothed_magnitude * 2.0)
             self.S_buffer = np.roll(self.S_buffer, -1, axis=1)
             self.S_buffer[:, -1] = db_frame
             

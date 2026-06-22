@@ -5,7 +5,7 @@ import numpy as np
 from core.environment import Environment, VesselTrackingRLEnv
 from core.agent import DispatcherAgent, SignalProcessorAgent
 from core.agent.rl_agent import RLAgent
-from core.agent.policy import DoubleQLearningPolicy, LinearFAPolicy, DynaQPolicy, ActorCriticPolicy
+from core.agent.policy import DoubleQLearningPolicy, LinearFAPolicy, ActorCriticPolicy
 
 # Default dataset directory
 BASE_DIR = os.environ.get("RECORDINGS_DIR", "C:/Users/Roy/Recordings")
@@ -93,7 +93,7 @@ async def main():
     import argparse
     parser = argparse.ArgumentParser(description="Train RL Tracking Agent")
     parser.add_argument("--agent", type=str,
-                        choices=["double_q_learning", "linear_fa", "dyna_q", "actor_critic"],
+                        choices=["double_q_learning", "linear_fa", "actor_critic"],
                         default="double_q_learning", help="Agent type to train")
     parser.add_argument("--dataset", type=str,
                         choices=["croatia", "croatia_2507_2", "croatia_2407_1", "croatia_2407_2", "croatia_2307", "scooter"],
@@ -121,24 +121,27 @@ async def main():
     agent_titles = {
         "double_q_learning": "DOUBLE Q-LEARNING",
         "linear_fa": "LINEAR FUNCTION APPROXIMATION (Tile Coding)",
-        "dyna_q": "DYNA-Q (Planning + Model)",
         "actor_critic": "ACTOR-CRITIC (Policy Gradient + Value Function)",
     }
     agent_title = agent_titles.get(args.agent, args.agent.upper())
 
     if args.dataset == "scooter":
         file_dir = f"{BASE_DIR}/DepartmentalCruise-2025-06-12/icListen/wav"
+        min_freq = 400
     elif args.dataset == "croatia_2507_2":
-        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2507_2"
-    elif args.dataset == "croatia_2407_1":
-        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2407_1"
-    elif args.dataset == "croatia_2407_2":
-        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2407_2"
-    elif args.dataset == "croatia_2307":
-        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2307"
+        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2507_2_joint"
         min_freq = 40
+    elif args.dataset == "croatia_2407_1":
+        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2407_1_600m"
+        min_freq = 40
+    elif args.dataset == "croatia_2407_2":
+        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2407_2_snake"
+        min_freq = 400
+    elif args.dataset == "croatia_2307":
+        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2307_free"
+        min_freq = 400
     else:
-        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2507_1"
+        file_dir = f"{BASE_DIR}/Croatia/Ocean Sonics/2507_1_1k"
         min_freq = 40
 
     max_freq = 4000
@@ -157,8 +160,6 @@ async def main():
         policy = DoubleQLearningPolicy(alpha=alpha, gamma=gamma)
     elif args.agent == "linear_fa":
         policy = LinearFAPolicy(alpha=0.01, gamma=gamma)
-    elif args.agent == "dyna_q":
-        policy = DynaQPolicy(alpha=alpha, gamma=gamma, n_planning=20)
     elif args.agent == "actor_critic":
         policy = ActorCriticPolicy(alpha_actor=0.05, alpha_critic=0.1, gamma=gamma)
     else:
