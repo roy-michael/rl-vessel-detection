@@ -1,7 +1,7 @@
 {
   "python.defaultInterpreterPath": "D:\\venvs\\.venv-3.14-rl\\Scripts\\python.exe",
   "terminal.integrated.env.windows": {
-    "RECORDINGS_DIR": "D:/RoyStudies/Recordings"
+    "RECORDINGS_DIR": "C:/Users/Roy/Recordings"
   },
   "python.envFile": "${workspaceFolder}/.env"
 }

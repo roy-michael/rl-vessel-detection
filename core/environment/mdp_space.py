@@ -52,6 +52,23 @@ class TrackingRewardCalculator:
     Purpose:
         Decouples the reward structure, scales, and criteria into a modular object that can be
         customized independently of environment progression or signal parsing.
+
+    Rationale for Reward Selection:
+        The numerical values were selected to create a balanced, zero-sum-like economy 
+        that heavily penalizes illegal state transitions and strongly rewards continuity:
+        
+        - `+10.0` (Good Association / High Tonal Spawn): The highest possible reward. The primary goal 
+          of the tracker is to maintain continuous tracks and identify clear targets.
+        - `-10.0` (False Negative / Duplicate Spawn): A symmetric penalty. Ignoring a valid track or 
+          cluttering the DSP layer with duplicates is equally as bad as succeeding is good.
+        - `-20.0` (Invalid Association): The most severe penalty. Attempting to associate to a 
+          non-existent track is an illegal state transition. It is penalized doubly to rapidly 
+          discourage this path during early exploration.
+        - `+5.0` (Speed Change / Med Tonal Spawn): A moderate reward. We want to encourage spawning, 
+          but it must be strictly lower than +10.0 so the agent prefers tracking an existing vessel 
+          over constantly spawning fragmented new tracks.
+        - `+2.0` (Correct Reject): A small positive baseline reward for filtering noise. If this was 
+          too high, the agent would learn a lazy policy of rejecting everything.
     """
 
     def __init__(self, reject_penalty: float = -10.0, correct_reject_reward: float = 2.0,
