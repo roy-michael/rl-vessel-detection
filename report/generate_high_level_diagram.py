@@ -2,39 +2,36 @@ import base64
 import requests
 
 mmd = """---
-title: Multi-Agent Tracking Hierarchy
+title: RL Tracking Feedback Loop
 ---
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#e1e8f0', 'edgeLabelBackground':'#ffffff', 'tertiaryColor': '#f4f4f4', 'nodeTextColor': '#000000', 'fontFamily': 'sans-serif'}}}%%
-graph TD
-    classDef envLayer fill:#e0f7fa,stroke:#006064,stroke-width:2px,rx:10px,ry:10px,color:#000000;
-    classDef dspLayer fill:#fce4ec,stroke:#880e4f,stroke-width:2px,color:#000000;
-    classDef rlLayer fill:#f3e5f5,stroke:#4a148c,stroke-width:2px,rx:5px,ry:5px,color:#000000;
-    classDef policy fill:#e8eaf6,stroke:#1a237e,stroke-width:2px,color:#000000;
+%%{init: {'theme': 'base', 'themeVariables': { 'fontFamily': 'sans-serif'}}}%%
+graph TB
+    classDef engine fill:#2C3E50,stroke:#18BC9C,stroke-width:4px,color:#ffffff;
+    classDef env fill:#E8F8F5,stroke:#117A65,stroke-width:4px,color:#117A65;
+    classDef data fill:#FEF9E7,stroke:#D4AC0D,stroke-width:3px,color:#7D6608;
+    classDef action fill:#FDEDEC,stroke:#E74C3C,stroke-width:3px,color:#922B21;
 
-    subgraph Environment [Acoustic Environment]
-        Dispatcher{"Dispatcher Agent<br/>(Audio Processing & Routing)"}:::dspLayer
-        RLEnv["Standardized RL Environment Wrapper"]:::envLayer
-        
-        Dispatcher -->|Extracted Acoustic Peaks| RLEnv
+    Agent([🧠 RL Agent<br/>Decision Engine]):::engine
+    Env[[🌊 Tracking Environment<br/>MDP Wrapper]]:::env
+
+    subgraph The Feedback Loop
+        direction LR
+        Action([⚡ Action<br/>SPAWN, ASSOCIATE, REJECT]):::action
+        State([📊 State<br/>Distance, Amplitude, Tonality]):::data
+        Reward([💰 Reward<br/>+10 Good, -10 Penalty]):::data
     end
 
-    subgraph Brain [RL Decision Engine]
-        Agent(("Master RL Tracking Agent<br/>(Parent)")):::rlLayer
-        Policy>"Tracking Policy"]:::policy
-        
-        RLEnv -->|Provides States & Rewards| Agent
-        Agent <-->|Optimizes| Policy
-    end
-
-    subgraph Execution [Execution Layer]
-        Processors["Target Trackers<br/>(Child Agents)"]:::dspLayer
-        
-        Agent -->|Issues Actions: Spawn, Associate, Reject| Processors
-        Processors -.->|Track Updates| Dispatcher
-    end"""
+    Agent -->|Executes| Action
+    Action -->|Applied to| Env
+    
+    Env -->|Observes| State
+    Env -->|Calculates| Reward
+    
+    State -->|Input to| Agent
+    Reward -->|Optimizes| Agent"""
 
 b64 = base64.urlsafe_b64encode(mmd.encode('utf-8')).decode('utf-8')
-url = f'https://mermaid.ink/img/{b64}?type=png&bgColor=white&width=1200&scale=2'
+url = f'https://mermaid.ink/img/{b64}?type=png&bgColor=white&width=2400&scale=2'
 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)'}
 r = requests.get(url, headers=headers)
 
