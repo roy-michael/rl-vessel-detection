@@ -1,5 +1,9 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import asyncio
+
 
 import librosa
 import matplotlib.pyplot as plt
@@ -26,7 +30,10 @@ async def main():
                         default="croatia", help="Dataset the policy was trained on")
     parser.add_argument("--max-files", type=int, default=None, help="Maximum number of files to process")
     parser.add_argument("--headless", action="store_true", help="Run without graphical display")
+    parser.add_argument("--make-video", action="store_true", help="Compile live tracking screenshots into an MP4 video clip")
     args = parser.parse_args()
+
+
 
     _ds_prefix = {
         "croatia":         "croatia_2507_1",
@@ -514,5 +521,52 @@ async def main():
             except Exception as e:
                 print(f"Could not generate joint histogram: {e}")
 
+        # Compile video if requested and frames were saved
+        if getattr(args, 'make_video', False):
+            try:
+                frames_dir = "output/frames"
+                if os.path.exists(frames_dir):
+                    import glob
+                    images = sorted(glob.glob(os.path.join(frames_dir, "frame_*.jpg")))
+                    if images:
+                        import cv2
+                        
+                        # Load first frame to get dimensions
+                        first_frame = cv2.imread(images[0])
+                        height, width, layers = first_frame.shape
+                        
+                        # Ensure dimensions are even (FFmpeg encoders require even dimensions)
+                        width = (width // 2) * 2
+                        height = (height // 2) * 2
+                        
+                        video_filename = f"{_ds_prefix}_{args.rl_agent}_live_tracking_progress.mp4"
+                        video_path = os.path.join(out_dir, video_filename)
+                        print(f"Compiling {len(images)} frames into video ({width}x{height}): {video_path}...")
+                        
+                        # Try mp4v first, fallback to MJPG if needed
+                        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                        video = cv2.VideoWriter(video_path, fourcc, 15.0, (width, height))
+                        
+                        # If it fails to open, try MJPG
+                        if not video.isOpened():
+                            print("Codec 'mp4v' failed to open. Falling back to 'MJPG' codec.")
+                            fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+                            video = cv2.VideoWriter(video_path, fourcc, 15.0, (width, height))
+                            
+                        for img_path in images:
+                            img = cv2.imread(img_path)
+                            # Resize to ensure exact even dimensions
+                            if img.shape[1] != width or img.shape[0] != height:
+                                img = cv2.resize(img, (width, height))
+                            video.write(img)
+                        video.release()
+                        print(f"Saved tracking progress video to {video_path}")
+            except ImportError:
+                print("Notice: 'opencv-python' (cv2) is not installed. Skipping automatic video compilation from saved frames.")
+            except Exception as e:
+                print(f"Could not generate tracking progress video: {e}")
+
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main())

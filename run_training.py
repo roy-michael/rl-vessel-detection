@@ -1,6 +1,10 @@
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import asyncio
 import numpy as np
+
 
 from core.environment import AcousticDataStreamer, TrackingMDPEnv
 from core.agent import DSPOrchestrator, VesselTrackProcessor
@@ -100,6 +104,7 @@ async def main():
                         default="croatia", help="Dataset to train on")
     parser.add_argument("--episodes", type=int, default=150, help="Number of training episodes")
     parser.add_argument("--max-files", type=int, default=10, help="Maximum number of audio files to process per episode")
+    parser.add_argument("--headless", action="store_true", help="Run without UI")
     args = parser.parse_args()
 
     _ds_prefix = {
@@ -153,15 +158,19 @@ async def main():
     num_episodes = args.episodes
     initial_epsilon = 1.0
     min_epsilon = 0.05
-    alpha = 0.15
+    # Reduce learning rate for smoother/gradual convergence over 500 episodes
+    alpha = 0.03 if num_episodes > 150 else 0.15
     gamma = 0.85
-
+ 
     if args.agent == "double_q_learning":
         policy = DoubleQLearningPolicy(alpha=alpha, gamma=gamma)
     elif args.agent == "linear_fa":
         policy = LinearFAPolicy(alpha=0.01, gamma=gamma)
     elif args.agent == "actor_critic":
-        policy = ActorCriticPolicy(alpha_actor=0.05, alpha_critic=0.1, gamma=gamma)
+        # Scale actor-critic learning rates down for gradual 500-episode learning
+        ac_alpha_actor = 0.005 if num_episodes > 150 else 0.05
+        ac_alpha_critic = 0.01 if num_episodes > 150 else 0.10
+        policy = ActorCriticPolicy(alpha_actor=ac_alpha_actor, alpha_critic=ac_alpha_critic, gamma=gamma)
     else:
         raise ValueError(f"Unknown agent type: {args.agent}")
 

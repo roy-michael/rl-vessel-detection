@@ -16,7 +16,11 @@ Usage:
   python compare_rl_agents.py --skip-training
 """
 import os
+from dotenv import load_dotenv
+load_dotenv()
+
 import sys
+
 import re
 import json
 import argparse

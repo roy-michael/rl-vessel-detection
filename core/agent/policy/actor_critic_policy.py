@@ -38,6 +38,9 @@ class ActorCriticPolicy(Policy):
                next_state: tuple, epsilon: float) -> None:
         self._ensure_state(state)
         
+        # Scale the single-step reward to a small range ([-1.0, 0.5])
+        scaled_reward = reward / 20.0
+        
         # 1. Evaluate Critic (TD Error)
         v_s = self.v_table[state]
         
@@ -47,10 +50,14 @@ class ActorCriticPolicy(Policy):
             self._ensure_state(next_state)
             v_next = self.v_table[next_state]
             
-        delta = reward + self.gamma * v_next - v_s
+        delta = scaled_reward + self.gamma * v_next - v_s
+        
+        # Clip TD error to prevent exploding preference values (gradient clipping)
+        delta = float(np.clip(delta, -1.0, 1.0))
         
         # 2. Update Critic
         self.v_table[state] += self.alpha_critic * delta
+
         
         # 3. Update Actor (Policy Gradient)
         preferences = np.array(self.theta_table[state])
@@ -62,6 +69,10 @@ class ActorCriticPolicy(Policy):
                 self.theta_table[state][a] += self.alpha_actor * delta * (1 - pi[a])
             else:
                 self.theta_table[state][a] -= self.alpha_actor * delta * pi[a]
+
+        # Center preferences (normalization) to prevent long-term numerical drift
+        centered_prefs = np.array(self.theta_table[state]) - np.mean(self.theta_table[state])
+        self.theta_table[state] = list(centered_prefs)
 
     def get_state(self, det: dict, rl_env) -> tuple:
         """Delegates to the environment's state encoder and returns the discrete representation."""

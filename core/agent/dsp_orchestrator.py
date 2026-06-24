@@ -198,7 +198,7 @@ class DSPOrchestrator:
 
         extent = [self.xaxis_extent[0], self.xaxis_extent[1], self._env.freqs_plot[0], self._env.freqs_plot[-1]]
         self.img = self.ax_spec.imshow(self.S_buffer, aspect='auto', origin='lower', 
-                        cmap='magma', extent=extent, vmin=-60, vmax=0)
+                        cmap='inferno', extent=extent, vmin=-55, vmax=-25)
         self.ax_spec.set_xlim(self.xaxis_extent)
         self.title = self.ax_spec.set_title("Live Spectrogram")
         self.ax_spec.set_xlabel("Time (s, relative to now)")
@@ -272,8 +272,8 @@ class DSPOrchestrator:
                 freqs = self._env.freqs_plot
                 num_freqs = len(freqs)
                 
-                np.random.seed(42)
-                H_init = np.random.rand(self.n_components, num_freqs) * 0.01 + 0.01
+                rng = np.random.default_rng(42)
+                H_init = rng.random((self.n_components, num_freqs)) * 0.01 + 0.01
                 centers_norm = np.power(np.linspace(0, 1, self.n_components), 2)
                 centers = centers_norm * (freqs[-1] - freqs[0]) + freqs[0]
                 
@@ -282,7 +282,7 @@ class DSPOrchestrator:
                     bump = np.exp(-0.5 * ((freqs - centers[i]) / sigma) ** 2)
                     H_init[i] += bump
                 
-                W_init = np.random.rand(data_to_fit.shape[0], self.n_components) * 0.1 + 0.1
+                W_init = rng.random((data_to_fit.shape[0], self.n_components)) * 0.1 + 0.1
                 
                 model = NMF(
                     n_components=self.n_components, 
@@ -1137,7 +1137,7 @@ class DSPOrchestrator:
             self.fig.canvas.flush_events()
             
             try:
-                self.fig.savefig(f'output/frames/frame_{self.frame_counter:04d}.jpg')
+                self.fig.savefig(f'output/frames/frame_{self.frame_counter:04d}.jpg', dpi=150)
                 self.frame_counter += 1
             except Exception as e:
                 print(f"Error saving frame: {e}")
