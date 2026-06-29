@@ -1,3 +1,6 @@
+---
+displayHeaderFooter: false
+---
 <style>
 body {
     font-family: Arial, sans-serif;
@@ -5,13 +8,25 @@ body {
     line-height: 1.5;
     padding: 1in;
 }
+@media print {
+    @page {
+        margin: 0; /* Hides default header/footer in Chromium PDF export */
+    }
+    body {
+        padding: 1in; /* Restores margin spacing within the document body */
+    }
+}
 </style>
+<script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+<script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
 
 # Final Project Report: Reinforcement Learning for Underwater Acoustic Vessel Detection and Tracking
 
 **Course**: Introduction to Reinforcement Learning  
-**Authors**: Roy Michael  
+**Author**: Roy Michael  
 **Date**: June 2026  
+**Code Reference**: [https://github.com/roy-michael/rl-vessel-detection](https://github.com/roy-michael/rl-vessel-detection)
 
 ---
 
@@ -31,9 +46,9 @@ Passive sonar systems process continuous acoustic spectrum streams to monitor ma
 
 Reinforcement Learning methodology was chosen for three reasons:
 
-1.  **Sequential Decision-Making Under Uncertainty**: Sonar tracking is not an independent classification task; decisions have long-term consequences. An incorrect `SPAWN` on a transient noise peak yields immediate clutter and forces subsequent duplicate association penalties. Conversely, a premature track termination during a vessel speed change requires a costly re-acquisition. RL is uniquely suited to optimize for *cumulative, long-term rewards*, balancing immediate association margins against future track stability.
+1.  **Sequential Decision-Making Under Uncertainty**: Sonar tracking is not an independent classification task; decisions have long-term consequences. An incorrect tracking on a transient noise peak yields immediate clutter and forces subsequent duplicate association penalties. Conversely, a premature track termination during a vessel speed change requires a costly re-acquisition. RL is uniquely suited to optimize for *cumulative, long-term rewards*, balancing immediate association margins against future track stability.
 2.  **Dynamic Speed Adaptation**: When a vessel changes speed, its acoustic signature undergoes substantial frequency drift. Heuristic rules cannot distinguish between a drifting vessel track and a nearby new target. By framing the problem as an MDP, the agent learns to utilize the joint state space (distance, amplitude, and track age/tonality) to keep tracking a vessel through high-drift regions (associating with a discount) while rejecting spurious noise.
-3.  **State Space Simplification via Feature Encapsulation**: An end-to-end Deep RL network trying to learn raw spectrogram pixels would require millions of training samples and fail to converge. Our approach wraps classical signal processing (NMF and spectral clustering inside the `DSPOrchestrator`) to act as the environment. This strips away high-dimensional acoustic noise, reducing the state space to a highly compact 6 × 5 × 5 × 4 grid (600 discrete states). This encapsulation makes tabular RL algorithms like Double Q-Learning extremely robust, achieving fast convergence (under 20 episodes) and producing highly interpretable state-action profiles.
+3.  **State Space Simplification via Feature Encapsulation**: An end-to-end Deep RL network trying to learn raw spectrogram pixels would require millions of training samples and fail to converge. Our approach wraps classical signal processing (Non-negative Matrix Factorization (NMF) and spectral clustering inside the `DSPOrchestrator`; see [Appendix A](#appendix-a-non-negative-matrix-factorization-nmf-in-sonar-processing)) to act as the environment. This strips away high-dimensional acoustic noise, reducing the state space to a highly compact 6 × 5 × 5 × 4 grid (600 discrete states). This encapsulation makes tabular RL algorithms like Double Q-Learning extremely robust, achieving fast convergence (under 20 episodes) and producing highly interpretable state-action profiles.
 
 ### 1.3 Objectives
 This project refactors the traditional tracking system into a Reinforcement Learning process where it's primary objectives are:
@@ -62,12 +77,12 @@ Figure 1.1 shows the field experiment setup and trail in Silba, Croatia (Silba 1
     <td style="width: 50%; text-align: center; border: none; padding: 5px;">
       <img src="./images/suax-vrx-setup-annotated.png" style="width: 100%;" />
       <br>
-      <em>Figure 1.2: Underwater Acoustic Receiver Setup (Annotated with DPV/Scooter and Hydrophone positions)</em>
+      <em>Figure 1.2: A DPV/Scooter and Hydrophone as underwater acoustic receiver setup</em>
     </td>
     <td style="width: 50%; text-align: center; border: none; padding: 5px;">
       <img src="./images/small-boat.png" style="width: 100%;" />
       <br>
-      <em>Figure 1.3: Small Support Vessel/Boat Acoustic Tracking Experiment</em>
+      <em>Figure 1.3: Small support vessel/boat acoustic tracking experiment</em>
     </td>
   </tr>
 </table>
@@ -83,6 +98,7 @@ The tracking task is formulated as a discrete-time Markov Decision Process (MDP)
 The state representation is designed to capture the spectral relationship and temporal characteristics between a newly detected acoustic frequency peak and the existing target tracks. The raw continuous feature vector is:
 <div style="text-align: center; margin: 1em 0;"><b>s</b> = (<i>d</i><sub>Hz</sub>, <i>A</i>, <i>T</i>, <i>age</i>)</div>
 where:
+
 *   <i>d</i><sub>Hz</sub>: The spectral distance (in Hz) from the detection's centroid frequency to the mean frequency of the closest active vessel tracking processor.
 *   <i>A</i>: The relative amplitude (activation weight) of the detection.
 *   <i>T</i>: The tonality (or confidence) score. Tonality measures how "mechanical" and continuous a sound is compared to random broadband noise. See [Appendix B](#appendix-b-mathematics-of-tonality-spectral-flatness) for details.
@@ -204,34 +220,7 @@ The action-reward framework directly models the physical realities of marine aco
 *   **Duplication Logic (Echoes & Harmonics)**: Acoustic waves bounce off the sea floor and surface, causing multipath echoes or harmonic overtones that appear very close to the true frequency on the spectrogram. The Duplicate Spawn penalty (-10.0 if ≤ 35 Hz from an active track) forces the agent to realize that two overlapping, parallel frequencies are actually the exact same physical boat, and it should not spawn duplicate trackers for them.
 *   **Spawn Logic (New Targets)**: A completely new, unassociated peak that remains highly tonal (<i>T</i> ≥ 0.65) strongly implies a brand-new vessel entering the acoustic radius of the hydrophone, requiring a new tracker.
 
-### 2.7 Hyperparameter Configuration & Tuning
 
-To ensure stable policy convergence and robust trajectory reconstruction across the varied marine environments in our datasets, we optimized the algorithm-specific hyperparameters using a combination of systematic grid search and empirical validation.
-
-#### 2.7.1 Hyperparameter Summary Table
-
-The table below outlines the final tuned hyperparameters utilized across the evaluated reinforcement learning paradigms:
-
-| Parameter | Policy / Agent Context | Tuned Value | Tuning Range / Notes |
-| :--- | :--- | :---: | :--- |
-| **Learning Rate (<i>α</i>)** | Double Q-Learning | `0.1` | Evaluated [0.01, 0.2]. A rate of 0.1 balances rapid update response with TD-error variance stability. |
-| **Discount Factor (<i>γ</i>)** | All Policies | `0.9` | Evaluated [0.5, 0.99]. <i>γ</i> = 0.9 ensures the agent values future track stability (long-term cumulative rewards) without over-valuing distant, uncertain transitions. |
-| **Initial Exploration (<i>ε</i><sub>start</sub>)** | All Policies (Training) | `1.0` | Starts with fully random actions to discover track-spawning and association pathways. |
-| **Minimum Exploration (<i>ε</i><sub>min</sub>)** | All Policies (Training) | `0.05` | Retains a 5% residual exploration to prevent policy freezing during non-stationary acoustic transitions. |
-| **Exploration Decay** | All Policies (Training) | `Linear` | Decays linearly from 1.0 to 0.05 over the course of 500 episodes. |
-| **Tiling Count (<i>n</i><sub>tilings</sub>)** | Linear FA Policy | `4` | Evaluated [2, 8]. Overlapping offsets to resolve continuous state dimensions. |
-| **Tile Resolution (<i>n</i><sub>tiles</sub>)** | Linear FA Policy | `6` | Evaluated [4, 10]. Bins the continuous distance, amplitude, tonality, and track age spaces. |
-| **Normalized Learning Rate (<i>α</i><sub>FA</sub>)** | Linear FA Policy | `0.0025` | Normalised dynamically as <i>α</i> / <i>n</i><sub>tilings</sub> = 0.01 / 4 to prevent weight-update divergence during tile-coding backpropagation. |
-| **Actor Learning Rate (<i>α</i><sub><i>θ</i></sub>)** | Actor-Critic Policy | `0.05` | Evaluated [0.01, 0.1]. Normalised lower than the critic to ensure policy change is gradual. |
-| **Critic Learning Rate (<i>α</i><sub><i>w</i></sub>)** | Actor-Critic Policy | `0.1` | Evaluated [0.05, 0.2]. Faster rate to keep the state-value estimates responsive to tracking changes. |
-
-#### 2.7.2 Tuning Methodology & Rationale
-
-1.  **Discount Factor (<i>γ</i>) Selection**: Underwater acoustic targets are characterized by temporary fading and brief signal drops. A low discount factor (<i>γ</i> < 0.7) makes the agent shortsighted, causing it to quickly reject a fading target. A high discount factor (<i>γ</i> ≥ 0.9) successfully guides the agent to perform `ASSOCIATE` actions even when local peak amplitudes decrease temporarily, maintaining track continuity.
-2.  **Linear FA Weight Normalization**: Because tile coding maps a continuous coordinate to <i>n</i><sub>tilings</sub> = 4 active binary features simultaneously, updating the weights directly with a standard learning rate causes extreme oscillations. Dividing the learning rate by the number of active tilings (<i>α</i><sub>FA</sub> = <i>α</i> / <i>n</i><sub>tilings</sub>) normalizes the gradient step, facilitating smooth value approximation.
-3.  **Exploration Schedule**: Decaying <i>ε</i> linearly over 500 episodes ensures that the agents transition from broad environmental exploration (finding all possible target configurations) to exploitation (refining track-holding policies) before the final training phases.
-
----
 
 ## 3. System Architecture & Code Hierarchy
 
@@ -301,38 +290,41 @@ If a trained RL policy file is not found or the tracker is explicitly instantiat
 
 We implement and evaluate three distinct reinforcement learning algorithms to solve this tracking MDP.
 
-### 5.1 Double Q-Learning
+### 4.1 Double Q-Learning
 To prevent maximization bias (overestimating Q-values due to the max operator in noisy environments), Double Q-learning maintains two independent action-value tables, <i>Q<sub>A</sub></i> and <i>Q<sub>B</sub></i>. One table is randomly selected for updating using the greedy action selected from the other table:
 <div style="text-align: center; margin: 1em 0;"><i>Q<sub>A</sub></i>(<i>s</i>, <i>a</i>) ← <i>Q<sub>A</sub></i>(<i>s</i>, <i>a</i>) + <i>α</i> [ <i>r</i> + <i>γ</i> <i>Q<sub>B</sub></i>(<i>s'</i>, argmax<sub><i>a'</i></sub> <i>Q<sub>A</sub></i>(<i>s'</i>, <i>a'</i>)) - <i>Q<sub>A</sub></i>(<i>s</i>, <i>a</i>) ]</div>
 
-### 5.2 Linear Function Approximation (Linear FA)
+### 4.2 Linear Function Approximation (Linear FA)
 For continuous state spaces, we represent the action-value function as a linear combination of features:
-<div style="text-align: center; margin: 1em 0;"><i>Q̂</i>(<i>s</i>, <i>a</i>, <b>w</b>) = <b>w</b><sub><i>a</i></sub><sup>T</sup> <b>φ</b>(<i>s</i>)</div>
-where <b>φ</b>(<i>s</i>) is a 5,184-dimensional sparse binary feature vector generated using an overlapping **Tile Coding** structure across the continuous features (<i>d</i><sub>Hz</sub>, <i>A</i>, <i>T</i>, <i>age</i>). 
+<div style="text-align: center; margin: 1em 0;"><i>Q̂</i>(<i>s</i>, <i>a</i>, <b>w</b>) = <b>w</b><sub><i>a</i></sub><sup>T</sup> <i>φ</i>(<i>s</i>)</div>
+where <i>φ</i>(<i>s</i>) is a 5,184-dimensional sparse binary feature vector generated using an overlapping **Tile Coding** structure across the continuous features (<i>d</i><sub>Hz</sub>, <i>A</i>, <i>T</i>, <i>age</i>). 
 
 The dimensionality of 5,184 is calculated as follows:
-$$\text{Dimensionality} = n_{\text{tilings}} \times (n_{\text{tiles}})^{d} = 4 \times 6^4 = 5,184$$
+<div style="text-align: center; margin: 1em 0;">Dimensionality = <i>n</i><sub>tilings</sub> × (<i>n</i><sub>tiles</sub>)<sup><i>d</i></sup> = 4 × 6<sup>4</sup> = 5,184</div>
 where:
-*   $n_{\text{tilings}} = 4$ is the number of overlapping tilings.
-*   $n_{\text{tiles}} = 6$ is the number of partition tiles per dimension.
-*   $d = 4$ is the number of tiled continuous state variables (spectral distance $d_{\text{Hz}}$, amplitude $A$, tonality $T$, and track age $age$).
 
-*   *Update rule*: <b>w</b><sub><i>a</i></sub> ← <b>w</b><sub><i>a</i></sub> + <i>α</i> <i>δ</i> <b>φ</b>(<i>s</i>) where <i>δ</i> is the semi-gradient TD error.
+*   <i>n</i><sub>tilings</sub> = 4 is the number of overlapping tilings.
+*   <i>n</i><sub>tiles</sub> = 6 is the number of partition tiles per dimension.
+*   <i>d</i> = 4 is the number of tiled continuous state variables (spectral distance <i>d</i><sub>Hz</sub>, amplitude <i>A</i>, tonality <i>T</i>, and track age <i>age</i>).
 
-### 5.3 Actor-Critic Policy
+*   *Update rule*: <b>w</b><sub><i>a</i></sub> ← <b>w</b><sub><i>a</i></sub> + <i>α</i> <i>δ</i> <i>φ</i>(<i>s</i>) where <i>δ</i> is the semi-gradient TD error.
+
+### 4.3 Actor-Critic Policy
 Actor-Critic decouples the policy parameterization (the Actor) from the value function representation (the Critic). The Actor selects actions based on preference parameters (<i>θ</i>), mapped via a softmax function, while the Critic estimates the state-value function (<i>V</i>(<i>s</i>)) using Temporal Difference updates:
 <div style="text-align: center; margin: 1em 0;"><i>δ</i> = <i>r</i> + <i>γ</i> <i>V</i>(<i>s'</i>) - <i>V</i>(<i>s</i>)</div>
 <div style="text-align: center; margin: 1em 0;"><i>V</i>(<i>s</i>) ← <i>V</i>(<i>s</i>) + <i>α<sub>w</sub></i> <i>δ</i></div>
 <div style="text-align: center; margin: 1em 0;"><i>θ</i>(<i>s</i>, <i>a</i>) ← <i>θ</i>(<i>s</i>, <i>a</i>) + <i>α<sub>θ</sub></i> <i>δ</i> ( ∇<sub><i>θ</i></sub> ln <i>π</i>(<i>a</i> | <i>s</i>) )</div>
 This enables a soft, probabilistic representation of tracking policies.
 
-### 5.4 Design Choice: Temporal Difference (TD) vs. Monte Carlo (MC)
-A critical architectural decision was utilizing **one-step TD control** (TD(0)) algorithms rather than **Monte Carlo (MC)** methods:
-1. **Bootstrapping vs. Episode-End Updates**: TD updates Q-values at every single step transition using estimated values of the next state, whereas MC must wait for the entire WAV recording episode to finish (processing thousands of frames) to calculate the cumulative return <i>G<sub>t</sub></i> before performing any parameter updates.
-2. **Variance and Convergence Speed**: Since passive sonar observations are highly noisy, the cumulative return <i>G<sub>t</sub></i> over long tracking episodes suffers from extreme variance. TD control mitigates this by bootstrapping, which significantly reduces update variance and accelerates policy convergence.
-3. **Online Tracking and Non-Stationarity**: Sonar signal processing requires real-time online adaptation. TD updates weights dynamically at each frame as new signals appear, whereas MC cannot learn online and lacks the capability to adapt during an active tracking run.
+### 4.4 Design Choice: Temporal Difference (TD) vs. Monte Carlo (MC)
 
-### 5.5 Policy Fitment Analysis
+One-step TD control (TD(0)) was selected over Monte Carlo (MC) methods for three primary reasons:
+
+1. **Step-Level Updates**: TD updates parameters incrementally at each frame transition, whereas MC must wait for the entire WAV episode to finish (processing thousands of frames) to calculate the cumulative return <i>G<sub>t</sub></i>.
+2. **Variance Reduction**: Passive sonar features are highly noisy. Accumulating returns over long tracking runs in MC introduces extreme variance, whereas TD's bootstrapping significantly stabilizes updates and accelerates policy convergence.
+3. **Real-Time Adaptation**: Sonar tracking requires online processing. TD adapts parameters frame-by-frame as signals fluctuate, whereas MC cannot learn online during an active tracking run.
+
+### 4.5 Policy Fitment Analysis
 
 To assess their suitability for acoustic vessel tracking, we analyzed the following policies:
 
@@ -345,6 +337,33 @@ To assess their suitability for acoustic vessel tracking, we analyzed the follow
 3.  **Actor-Critic (Stochastic Policy Representative)**
     *   **Fitment**: **High**.
     *   Uses a soft probabilistic policy to handle state ambiguity caused by high signal attenuation or fading harmonics. This allows the agent to maintain weak vessel tracks longer in high-noise acoustic regions without rigid switching, adapting better to unpredictable underwater propagation.
+
+### 4.6 Hyperparameter Configuration & Tuning
+
+To ensure stable policy convergence and robust trajectory reconstruction across the varied marine environments in our datasets, we optimized the algorithm-specific hyperparameters using a combination of systematic grid search and empirical validation.
+
+#### 4.6.1 Hyperparameter Summary Table
+
+The table below outlines the final tuned hyperparameters utilized across the evaluated reinforcement learning paradigms:
+
+| Parameter | Policy / Agent Context | Tuned Value | Tuning Range / Notes |
+| :--- | :--- | :---: | :--- |
+| **Learning Rate (<i>α</i>)** | Double Q-Learning | `0.1` | Evaluated [0.01, 0.2]. A rate of 0.1 balances rapid update response with TD-error variance stability. |
+| **Discount Factor (<i>γ</i>)** | All Policies | `0.9` | Evaluated [0.5, 0.99]. <i>γ</i> = 0.9 ensures the agent values future track stability (long-term cumulative rewards) without over-valuing distant, uncertain transitions. |
+| **Initial Exploration (<i>ε</i><sub>start</sub>)** | All Policies (Training) | `1.0` | Starts with fully random actions to discover track-spawning and association pathways. |
+| **Minimum Exploration (<i>ε</i><sub>min</sub>)** | All Policies (Training) | `0.05` | Retains a 5% residual exploration to prevent policy freezing during non-stationary acoustic transitions. |
+| **Exploration Decay** | All Policies (Training) | `Linear` | Decays linearly from 1.0 to 0.05 over the course of 500 episodes. |
+| **Tiling Count (<i>n</i><sub>tilings</sub>)** | Linear FA Policy | `4` | Evaluated [2, 8]. Overlapping offsets to resolve continuous state dimensions. |
+| **Tile Resolution (<i>n</i><sub>tiles</sub>)** | Linear FA Policy | `6` | Evaluated [4, 10]. Bins the continuous distance, amplitude, tonality, and track age spaces. |
+| **Normalized Learning Rate (<i>α</i><sub>FA</sub>)** | Linear FA Policy | `0.0025` | Normalised dynamically as <i>α</i> / <i>n</i><sub>tilings</sub> = 0.01 / 4 to prevent weight-update divergence during tile-coding backpropagation. |
+| **Actor Learning Rate (<i>α</i><sub><i>θ</i></sub>)** | Actor-Critic Policy | `0.05` | Evaluated [0.01, 0.1]. Normalised lower than the critic to ensure policy change is gradual. |
+| **Critic Learning Rate (<i>α</i><sub><i>w</i></sub>)** | Actor-Critic Policy | `0.1` | Evaluated [0.05, 0.2]. Faster rate to keep the state-value estimates responsive to tracking changes. |
+
+#### 4.6.2 Tuning Methodology & Rationale
+
+1.  **Discount Factor (<i>γ</i>) Selection**: Underwater acoustic targets are characterized by temporary fading and brief signal drops. A low discount factor (<i>γ</i> < 0.7) makes the agent shortsighted, causing it to quickly reject a fading target. A high discount factor (<i>γ</i> ≥ 0.9) successfully guides the agent to perform `ASSOCIATE` actions even when local peak amplitudes decrease temporarily, maintaining track continuity.
+2.  **Linear FA Weight Normalization**: Because tile coding maps a continuous coordinate to <i>n</i><sub>tilings</sub> = 4 active binary features simultaneously, updating the weights directly with a standard learning rate causes extreme oscillations. Dividing the learning rate by the number of active tilings (<i>α</i><sub>FA</sub> = <i>α</i> / <i>n</i><sub>tilings</sub>) normalizes the gradient step, facilitating smooth value approximation.
+3.  **Exploration Schedule**: Decaying <i>ε</i> linearly over 500 episodes ensures that the agents transition from broad environmental exploration (finding all possible target configurations) to exploitation (refining track-holding policies) before the final training phases.
 
 ---
 
@@ -366,14 +385,15 @@ All agents were trained for 500 episodes on the `Croatia 2407_1` dataset. Below 
 
 ### 5.2 Training Convergence
 
-The training convergence profile shows the policy performance across **500 episodes**. During training, each reinforcement learning algorithm (Double Q-Learning, Linear FA, and Actor-Critic) was trained to optimize the step-wise peak association decisions:
-1.  **Double Q-Learning**: Converges rapidly within 15–20 episodes to a stable, near-optimal policy, effectively eliminating maximization bias in noisy soundscapes.
-2.  **Linear FA (Tile Coding)**: Generalizes smoothly across the continuous state space features, but struggles to fully converge (exhibiting prolonged oscillations) due to feature overlap and interference across adjacent tiles under non-stationary noise.
-3.  **Actor-Critic**: Originally showed a flatline convergence profile due to premature policy saturation (where massive TD-errors locked softmax selection). With the implementation of reward scaling, TD-error clipping, and preference centering normalization, Actor-Critic now converges stably to a robust, probabilistic tracking policy.
+The training convergence profile across **500 episodes** shows the policy performance and learning progression for all three reinforcement learning algorithms (Double Q-Learning, Linear FA, and Actor-Critic):
+
+1.  **Double Q-Learning**: Starts with low returns (averaging -3,917) during the initial high-exploration phase. As the exploration rate $\epsilon$ decays linearly from 1.0 to 0.05, the cumulative reward rises steadily and converges to a stable, near-optimal plateau (averaging +10,891, ending at +11,527). The policy effectively learns the optimal peak association and track retention strategies, avoiding the maximization bias common in noisy soundscapes.
+2.  **Linear FA (Tile Coding)**: Demonstrates a highly similar convergence profile, starting at -3,909 and climbing to a stable plateau (averaging +10,879, ending at +11,554). The linear function approximation maps continuous state features smoothly, matching the performance of the tabular baseline once weight updates stabilize.
+3.  **Actor-Critic**: Plotted training rewards start and remain highly positive (averaging +11,405 at the start and +11,456 at the end). Because Actor-Critic explores stochastically using its learned softmax policy rather than uniform $\epsilon$-greedy action selection, it avoids the large negative penalties (such as the -20.0 invalid association penalty) right from the start of training, maintaining a clean, high-reward progression throughout.
 
 By plotting the greedy evaluation reward (<i>ε</i> = 0) alongside the noisy training rewards, we filter out exploration noise and expose the true policy learning progression:
 
-![Training Convergence Individual Plot Grid](./images/convergence_individual_500.png)
+![Training Convergence Individual Plot Grid](./images/convergence_individual.png)
 *Figure 5.3: Individual RL Agent Convergence Curves showing raw training returns and smoothed policy updates.*
 
 ### 5.3 Trajectory Reconstruction & Timelines
@@ -413,7 +433,7 @@ The timeline plot provides a comprehensive visual representation of the tracking
 
 ## 6. Discussion & Limitations
 
-1.  **Tabular Robustness**: Due to the compact state space (4 × 3 × 3 bins), tabular Q-Learning converges extremely fast (within 15 episodes) and demonstrates the highest tracking efficiency, achieving a stable cumulative reward plateau.
+1.  **Tabular Robustness**: Due to the compact state space (6 × 5 × 5 × 4 bins yielding 600 discrete states), tabular Double Q-Learning converges extremely fast and demonstrates the highest tracking efficiency, achieving stable greedy performance.
 2.  **Linear FA Sensitivity**: While continuous Tile Coding allows the agent to generalise across fine-grained variations in amplitude and frequency drift, it is highly sensitive to the chosen learning rate (<i>α</i>). Without normalization, it initially suffers from policy divergence under dense clutter.
 3.  **Real-Time Realism**: Integrating the real filename timestamps solved the timeline synchronization problem, aligning the tracker's timeline with the physical events recorded in the metadata (e.g. vessel passing and speed changes).
 4.  **Limitations**: The model assumes that the NMF background model is reasonably accurate. Under extreme noise where NMF components do not cleanly isolate signal peaks, the state features degrade, leading to spurious track spawns.
@@ -422,8 +442,9 @@ The timeline plot provides a comprehensive visual representation of the tracking
 
 When analyzing the training convergence graphs, two distinct visual phenomena occur due to the mechanics of the acoustic tracking environment and exploration strategies:
 
-**1. High Variance & Oscillating Trendlines (The <i>ε</i>-Greedy Noise)**
-While agents like Double Q-Learning actually converge to an optimal policy rapidly, their plotted *training* returns oscillate wildly with massive downward spikes. This noise is directly caused by the **<i>ε</i>-greedy exploration** mechanism (which retains a minimum exploration rate of <i>ε</i><sub>min</sub> = 0.05). In sequential tracking, a single random exploratory action (such as choosing `REJECT` instead of `ASSOCIATE` on a stable, active track) can cause the track to immediately timeout and collapse. This forfeits tens of thousands of points of potential future cumulative reward in a single step. Thus, the noise and variance in the training curves are artifacts of the mandatory 5% exploration actions, rather than an instability of the underlying greedy policy (which remains highly stable when evaluated at <i>ε</i> = 0).
+**1. Corrected Epsilon Decay and Epsilon-Greedy Learning Curves**
+In early code versions, an implementation bug in `run_training.py` left `rl_agent.epsilon` constant at 1.0 (performing 100% random actions) during all training episodes. This caused the training rewards to remain flat and deeply negative (around -4,300) even though the agents successfully learned optimal policies due to the off-policy nature of Q-learning. 
+After fixing this bug by assigning the decayed $\epsilon$ value at the start of each episode, the training curves for Double Q-Learning and Linear FA now show classic reinforcement learning convergence: starting at around -3,900 when exploration is 100%, and climbing steadily as $\epsilon$ decays down to 0.05, plateauing above +11,500. This confirms that as the frequency of random exploratory actions decreases, the agent's tracking policy is successfully deployed, and the massive penalties (e.g., -20.0 for invalid associations or -10.0 for duplicate spawns) are eliminated.
 
 **2. Resolving the Flatline via Multi-Level Normalization (Actor-Critic)**
 In early training iterations, the Actor-Critic policy exhibited a flat, constant reward line because of **Softmax preference saturation**. Because the environment's rewards are unscaled (ranging from -20.0 to +10.0), the raw TD-errors (<i>δ<sub>t</sub></i> = <i>R<sub>t</sub></i> + <i>γ</i> <i>V</i>(<i>s<sub>t+1</sub></i>) - <i>V</i>(<i>s<sub>t</sub></i>)) are extremely large. When these large gradients were backpropagated to update the Actor's preferences (<i>θ</i>(<i>s</i>, <i>a</i>)), preference differences quickly exceeded 20.0, driving the softmax selection probability of one action to 1.0 (saturation) and flatlining all updates.
@@ -593,6 +614,23 @@ To run training and self-evaluation in batch across all six datasets sequentiall
 python run_batch_all.py [num_episodes]
 ```
 This runs `run_orchestrator.py` sequentially for all datasets (`croatia`, `croatia_2307`, `croatia_2507_2`, `croatia_2407_1`, `croatia_2407_2`, `scooter`), training the policies and outputting comparative performance reports and figures.
+
+---
+
+## 10. References
+
+1.  Ahmad, F., Ansari, M. Z., Anwar, R., Shahzad, B., & Ikram, A. (2024). Deep Learning Based Classification of Underwater Acoustic Signals. *Procedia Computer Science*, 235, 1115-1124.
+2.  Chan, T. K., Chin, C. S., & Li, Y. (2019). Non-Negative Matrix Factorization-Convolutional Neural Network (NMF-CNN) for Sound Event Detection. *Proceedings of the Detection and Classification of Acoustic Scenes and Events 2019 Workshop (DCASE2019)*, 40-44.
+3.  Diamant, R., & Ferreira, F. (2025). Passive Detection of Scooter’s Underwater Radiated Noise. *2025 33rd European Signal Processing Conference (EUSIPCO)*, IEEE.
+4.  Feng, S., & Zhu, X. (2022). A Transformer-Based Deep Learning Network for Underwater Acoustic Target Recognition. *IEEE Geoscience and Remote Sensing Letters*, 19, 1-5.
+5.  Gao, Y., Cain, T., & Cooper, P. (2021). Automatic Detection of Underwater Propeller Signals Using Cyclostationarity Analysis. *Mechanical Systems and Signal Processing*, 146, 107032.
+6.  Kita, K. R. (2022). *Advances in Passive Acoustic Detection, Localization, and Tracking Applied to Unmanned Underwater Vehicles*. Doctoral dissertation, Woods Hole Oceanographic Institution.
+7.  Kita, K. R., Randeni, S., DiBiaso, D., & Schmidt, H. (2022). Passive Acoustic Tracking of an Unmanned Underwater Vehicle Using Bearing-Doppler-speed Measurements. *The Journal of the Acoustical Society of America*, 151(2), 1311-1324.
+8.  Kristen, R., DiBiaso, D., & Schmidt, H. (2020). An Acoustic Remote Sensing Method for High-Precision Propeller Rotation and Speed Estimation of Unmanned Underwater Vehicles. *The Journal of the Acoustical Society of America*, 148(6), 3942-3950.
+9.  Song, G., Guo, X., Wang, W., Ren, Q., Li, J., & Ma, L. (2021). A Machine Learning-Based Underwater Noise Classification Method. *Applied Acoustics*, 184, 108333.
+10. Tong, W., Wu, K., Wang, H., Cao, L., Huang, B., Wu, D., & Antoni, J. (2024). Adaptive Weighted Envelope Spectrum: A Robust Spectral Quantity for Passive Acoustic Detection of Underwater Propeller Based on Spectral Coherence. *Mechanical Systems and Signal Processing*, 212, 111265.
+11. Yan, B., Xu, N., Wang, G., Yang, S., & Xu, L. P. (2019). Detection of Multiple Maneuvering Extended Targets by Three-Dimensional Hough Transform and Multiple Hypothesis Tracking. *IEEE Access*, 7, 80717-80732.
+12. Zhu, C., Seri, S. G., Mohebbi-Kalkhoran, H., & Ratilal, P. (2020). Long-Range Automatic Detection, Acoustic Signature Characterization and Bearing-Time Estimation of Multiple Ships with Coherent Hydrophone Array. *Remote Sensing*, 12(22), 3731.
 
 ---
 

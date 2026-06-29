@@ -33,6 +33,8 @@ async def train_one_episode(episode_idx, rl_agent, epsilon, env):
     min_variance_floor = 25.0
     consolidation_threshold_hz = 25.0
 
+    # Update the agent's exploration rate for this episode
+    rl_agent.epsilon = epsilon
     env.reset()
 
     # We initialize DSPOrchestrator in headless mode with threshold parameters

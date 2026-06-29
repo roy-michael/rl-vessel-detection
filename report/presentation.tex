@@ -31,13 +31,74 @@
     \tableofcontents
 \end{frame}
 
+\section{Introduction to Underwater Acoustics}
+
+\begin{frame}{Acoustic Signals: From Time to Frequency}
+    \begin{columns}
+        \begin{column}{0.5\textwidth}
+            \centering
+            \includegraphics[width=\textwidth]{report/images/raw_acoustic_signal.png}
+            \captionof{figure}{Raw time-domain waveform.}
+        \end{column}
+        \begin{column}{0.5\textwidth}
+            \centering
+            \includegraphics[width=\textwidth]{report/images/LOFAR_Joint_Signal.png}
+            \captionof{figure}{LOFAR Spectrogram (STFT).}
+        \end{column}
+    \end{columns}
+    \vspace{0.8em}
+    \begin{itemize}
+        \item \textbf{Raw Time-Domain}: Acoustic pressure is heavily masked by ocean noise and shrimp clicks. Target motor tonals are visually indistinguishable.
+        \item \textbf{LOFAR Spectrogram}: Converts signal to time-frequency, exposing stable vessel engine signatures as narrowband horizontal tonals.
+    \end{itemize}
+\end{frame}
+
+\begin{frame}{Physical Challenges in Sonar Tracking}
+    \begin{columns}
+        \begin{column}{0.45\textwidth}
+            \centering
+            \includegraphics[width=\textwidth]{report/images/lofar_annotated.png}
+            \captionof{figure}{Acoustic multipath harmonics.}
+        \end{column}
+        \begin{column}{0.55\textwidth}
+            \begin{block}{Channel Obstacles to Tracking}
+                \begin{itemize}
+                    \item \textbf{Doppler Frequency Drift}: Vessel acceleration shifts observed frequencies:
+                        $$f_{\text{obs}} = f_0 \left( \frac{c \pm v_r}{c \mp v_s} \right)$$
+                        Tonal tracks ``slide'' across frequency bins.
+                    \item \textbf{Multipath Echoes}: Sea floor and surface reflections create parallel phantom tracks and harmonics.
+                    \item \textbf{Signal Fading}: Destructive interference causes Doppler nulls (temporary signal dropouts).
+                \end{itemize}
+            \end{block}
+        \end{column}
+    \end{columns}
+\end{frame}
+
+\begin{frame}{Non-negative Matrix Factorization (NMF)}
+    \begin{columns}
+        \begin{column}{0.55\textwidth}
+            \begin{block}{Unsupervised Source Separation}
+                \begin{itemize}
+                    \item Decomposes spectrogram $V \approx H \cdot W$ into static spectral components ($H$) and activation weights ($W$).
+                    \item \textbf{Application}: Isolates clean narrowband engine tonals (dictionary columns) while filtering out random broadband noise.
+                \end{itemize}
+            \end{block}
+        \end{column}
+        \begin{column}{0.45\textwidth}
+            \centering
+            \includegraphics[width=\textwidth]{report/images/NMF_Components_Joint_Signal.png}
+            \captionof{figure}{Extracted NMF components.}
+        \end{column}
+    \end{columns}
+\end{frame}
+
 \section{Project Overview \& Motivation}
 
 \begin{frame}{Project Overview \& Motivation}
     \begin{block}{Motivation}
         \begin{itemize}
-            \item Passive sonar tracking suffers from \textbf{non-stationary ocean noise} (waves, biological transients) and \textbf{Doppler frequency drifts} during vessel acceleration.
             \item Traditional heuristic trackers (nearest-neighbor Kalman filters) fail when frequency thresholds are too narrow (loss of track) or too wide (noise association).
+            \item We formulate sonar tracking as an MDP to learn robust, adaptive association policies.
         \end{itemize}
     \end{block}
     
@@ -75,114 +136,110 @@
     \end{figure}
 \end{frame}
 
-\section{Introduction to Underwater Acoustics}
+\section{System Architecture}
 
-\begin{frame}{Introduction to Underwater Acoustics}
-    \begin{block}{Acoustic Sound Propagation}
-        \begin{itemize}
-            \item Electromagnetic waves suffer from severe attenuation in saline water.
-            \item Sound waves travel efficiently in water ($c \approx 1500$~m/s), making acoustics the only viable long-range marine sensing modality.
-        \end{itemize}
-    \end{block}
-    
-    \begin{block}{Passive Sonar and Spectrograms}
-        \begin{itemize}
-            \item Hydrophones capture ambient pressure fields. 
-            \item Signals are converted to time-frequency \textbf{LOFAR spectrograms} via Short-Time Fourier Transform (STFT).
-            \item \textbf{Broadband Background Noise}: Flatly distributed spectral energy (wind, waves, distant shipping).
-            \item \textbf{Narrowband Tonals}: Concentrated frequency lines representing machinery rotation or propeller blade rates (vessel signatures).
-        \end{itemize}
-    \end{block}
+\begin{frame}{RL-DSP System Architecture \& Packages}
+    \begin{columns}
+        \begin{column}{0.5\textwidth}
+            \begin{block}{core.environment Package}
+                \begin{itemize}
+                    \item Manages low-level DSP streams.
+                    \item \texttt{AcousticDataStreamer} buffers frames.
+                    \item \texttt{TrackingMDPEnv} constructs states and critics the rewards.
+                \end{itemize}
+            \end{block}
+            \begin{block}{core.agent Package}
+                \begin{itemize}
+                    \item Houses target logic and policies.
+                    \item \texttt{DSPOrchestrator} handles peak associations.
+                    \item \texttt{RLAgent} implements policy decisions.
+                \end{itemize}
+            \end{block}
+        \end{column}
+        \begin{column}{0.5\textwidth}
+            \centering
+            \includegraphics[width=\textwidth]{report/images/high_level_architecture.png}
+            \captionof{figure}{Hierarchical RL-DSP architecture.}
+        \end{column}
+    \end{columns}
 \end{frame}
 
-\begin{frame}{Acoustic Channel Challenges}
-    \begin{block}{1. Doppler Frequency Shift}
-        Relative motion between vessel (source) and hydrophone (receiver) shifts observed frequencies:
-        $$f_{\text{observed}} = f_0 \left( \frac{c \pm v_r}{c \mp v_s} \right)$$
-        Vessel acceleration causes frequencies to ``slide'' across spectral bins.
-    \end{block}
-    \begin{block}{2. Multipath Propagation \& Echoes}
-        Reflections off the sea surface and sea floor create parallel multipath tracks and engine harmonic overtones.
-    \end{block}
-    \begin{block}{3. Signal Attenuation \& Fading}
-        Interference causes temporary signal drops (Doppler nulls), requiring trackers to maintain tracking state with zero-amplitude feedback.
-    \end{block}
-\end{frame}
-
-\begin{frame}{LOFAR Spectrogram Comparison}
-    \begin{figure}[H]
-        \centering
-        \begin{subfigure}[b]{0.58\textwidth}
+\begin{frame}{System Dynamics \& Component Interaction}
+    \begin{columns}
+        \begin{column}{0.55\textwidth}
+            \begin{block}{Detailed Processing Dynamics}
+                \begin{enumerate}
+                    \item \textbf{Acoustic Feed}: Spectrogram peaks are extracted by the NMF engine.
+                    \item \textbf{State Query}: The Orchestrator constructs state $S$ (nearest distance, amplitude, tonality, age) and queries the Agent.
+                    \item \textbf{Policy Action}: The RL Agent returns action $A$ (Spawn, Associate, or Reject).
+                    \item \textbf{Execution}: The Orchestrator routes the peak to update concurrent track processors.
+                \end{enumerate}
+            \end{block}
+        \end{column}
+        \begin{column}{0.45\textwidth}
             \centering
-            \includegraphics[height=4.5cm]{report/images/LOFAR_Joint_Signal.png}
-            \caption{Raw LOFAR Spectrogram.}
-        \end{subfigure}
-        \hfill
-        \begin{subfigure}[b]{0.38\textwidth}
-            \centering
-            \includegraphics[height=4.5cm]{report/images/lofar_annotated.png}
-            \caption{Annotated Base \& Harmonics.}
-        \end{subfigure}
-        \caption{Overlapping target signatures and multipath harmonics.}
-    \end{figure}
+            \includegraphics[width=\textwidth]{report/images/architecture_diagram.png}
+            \captionof{figure}{Component interaction model.}
+        \end{column}
+    \end{columns}
 \end{frame}
 
 \section{Problem Formulation}
 
 \begin{frame}{MDP State Space ($S$)}
     \begin{block}{Continuous State Vector}
-        $$\mathbf{s}_{\text{continuous}} = (d_{\text{Hz}}, A, T)$$
+        $$\mathbf{s}_{\text{continuous}} = (d_{\text{Hz}}, A, T, \text{age})$$
         \begin{itemize}
             \item $d_{\text{Hz}}$: Spectral distance to the mean frequency of the closest active tracker.
             \item $A$: Relative amplitude (activation weight) of the spectral peak.
-            \item $T$: \textbf{Tonality score} ($1.0 - \text{Spectral Flatness}$). High $T \approx 1.0$ indicates mechanical engine tones, low $T \approx 0.0$ indicates broadband noise.
+            \item $T$: \textbf{Tonality score} ($1.0 - \text{Spectral Flatness}$). Measures if sound is mechanical.
+            \item $\text{age}$: Continuous track age of the closest active track.
         \end{itemize}
     \end{block}
 
     \begin{block}{Discretized State Bins (for Tabular Agents)}
         \begin{itemize}
-            \item \textbf{Distance}: Very close ($\le 15$ Hz), Med close ($\le 45$ Hz), Far ($\le 90$ Hz), Out of range.
-            \item \textbf{Amplitude}: Low ($<0.005$), Medium ($0.005 \le A < 0.02$), High ($\ge 0.02$).
-            \item \textbf{Tonality}: Noise ($<0.45$), Moderate ($0.45 \le T < 0.65$), High ($\ge 0.65$).
+            \item \textbf{Distance} (6 bins): $\le 10, 25, 45, 70, 100\text{ Hz}$, out of range.
+            \item \textbf{Amplitude} (5 bins): $<0.003$ to $\ge 0.03$.
+            \item \textbf{Tonality} (5 bins): $<0.35$ to $\ge 0.80$.
+            \item \textbf{Track Age} (4 bins): $<2.0\text{s}$ to $\ge 30.0\text{s}$.
+            \item \textbf{Total State Space}: $6 \times 5 \times 5 \times 4 = 600$ discrete states.
         \end{itemize}
     \end{block}
 \end{frame}
 
-\begin{frame}{Vessel ID State Exclusion}
-    \begin{alertblock}{Design Choice: Vessel ID is NOT in the State Space}
-        \begin{itemize}
-            \item \textbf{Identity Invariance}: Acoustic physics (Doppler shifts, tonality) behave identically regardless of target labels.
-            \item \textbf{Dimensionality Reduction}: Including IDs would cause the state space to expand infinitely, causing Q-table sparsity and non-convergence.
-            \item \textbf{Separation of Concerns}:
-                \begin{itemize}
-                    \item \textbf{RL Agent}: Acts purely as a local router, mapping relative state ($d_{\text{Hz}}, A, T$) to action.
-                    \item \textbf{DSP Orchestrator}: Manages the global bookkeeping (generates sequential IDs on \texttt{SPAWN}, routes peaks to corresponding trackers on \texttt{ASSOCIATE}).
-                \end{itemize}
-        \end{itemize}
-    \end{alertblock}
+\begin{frame}{Markov Decision Process: Action Space}
+    \begin{block}{Action Set $A$ for Local Routing}
+        For each candidate peak frequency, the RL agent chooses a local action:
+        \begin{enumerate}
+            \item \textbf{REJECT ($a = 0$)}: Ignore peak. The orchestrator takes no action, letting inactive tracking states age.
+            \item \textbf{ASSOCIATE ($a = 1$)}: Route the peak frequency to update the coordinates of the closest active tracker.
+            \item \textbf{SPAWN ($a = 2$)}: Start a new, concurrent vessel tracker instance at the peak's frequency.
+        \end{enumerate}
+    \end{block}
 \end{frame}
 
-\begin{frame}{Action Space \& Reward Function}
-    \begin{block}{Discrete Actions $A$}
-        \begin{enumerate}
-            \item \textbf{REJECT ($a = 0$)}: Ignore peak.
+\begin{frame}{Markov Decision Process: Decoupled Reward Rules}
+    \begin{block}{Critic's Dense Feedback Calculations}
+        \begin{itemize}
+            \item \textbf{REJECT ($a = 0$)}:
                 \begin{itemize}
-                    \item \textit{Correct Reject}: $+2.0$ (ignoring ambient noise)
-                    \item \textit{False Negative Miss}: $-10.0$ (ignoring close, highly tonal peaks)
+                    \item \textit{Correct Reject} (ignoring ambient noise): $+2.0$
+                    \item \textit{False Negative Miss} (ignoring close, highly tonal peaks): $-10.0$
                 \end{itemize}
-            \item \textbf{ASSOCIATE ($a = 1$)}: Route peak to closest active tracker.
+            \item \textbf{ASSOCIATE ($a = 1$)}:
                 \begin{itemize}
-                    \item \textit{Good Association}: $+10.0$ (distance $\le 30$~Hz)
-                    \item \textit{Speed Stage Change}: $+5.0$ (distance $30 < d_{\text{Hz}} \le 65$~Hz)
-                    \item \textit{Bad Mismatch}: $-15.0$ (distance $> 65$~Hz)
-                    \item \textit{Invalid Association}: $-20.0$ (associating when no trackers exist)
+                    \item \textit{Good Association} ($d_{\text{Hz}} \le 30\text{ Hz}$): $+10.0$
+                    \item \textit{Speed Stage Change} ($30 < d_{\text{Hz}} \le 65\text{ Hz}$): $+5.0$
+                    \item \textit{Bad Mismatch / Target Crossing Mismatch}: $-15.0$
+                    \item \textit{Invalid Association} (associating when no trackers exist): $-20.0$
                 \end{itemize}
-            \item \textbf{SPAWN ($a = 2$)}: Start a new tracker.
+            \item \textbf{SPAWN ($a = 2$)}:
                 \begin{itemize}
-                    \item \textit{Duplicate Spawn}: $-10.0$ (close to an active tracker)
-                    \item \textit{Correct Spawn}: $+10.0$ (High tonal) or $+5.0$ (Med tonal)
+                    \item \textit{Duplicate Spawn} (spawning close to active track): $-10.0$
+                    \item \textit{Correct Spawn} (spawning new target with high/med tonality): $+10.0$ / $+5.0$
                 \end{itemize}
-        \end{enumerate}
+        \end{itemize}
     \end{block}
 \end{frame}
 
@@ -201,53 +258,25 @@
     \end{block}
 \end{frame}
 
-\begin{frame}{Self-Supervised Label-Free Training}
-    \begin{block}{How Training is Done Without Human Intervention}
-        \begin{itemize}
-            \item \textbf{State and Reward Autonomy}: Features and rewards are generated directly by physical signal relationships (frequency proximity and NMF tonality) rather than ground-truth datasets.
-            \item \textbf{Physical Consistency Constraints}: 
-                \begin{itemize}
-                    \item \textit{Redundancy}: Spawning multiple trackers close together violates tracking logic $\to$ penalized $-10.0$.
-                    \item \textit{Continuity}: Real targets cannot teleport $\to$ associating a distant peak is penalized $-15.0$.
-                \end{itemize}
-            \item \textbf{Temporal Consistency (TD Bootstrap)}: Spawning on transient noise spikes might not cause immediate loss, but leads to future timeout penalties. Temporal Difference (TD) updates propagate these future failures back to the early decisions that caused them, directing the policy toward long-term stability.
-        \end{itemize}
-    \end{block}
-\end{frame}
-
-\section{System Architecture}
-
-\begin{frame}{RL-DSP System Architecture}
-    \begin{itemize}
-        \item Decouples deterministic spectral processing from stochastic decision-making logic.
-        \item \textbf{core.environment}: Manages raw audio streams and calculates MDP state variables.
-        \item \textbf{core.agent}: Houses the \texttt{DSPOrchestrator} and policy classes.
-    \end{itemize}
-    \begin{figure}[H]
-        \centering
-        \includegraphics[width=0.65\textwidth]{report/images/high_level_architecture.png}
-        \caption{Hierarchical decision-making tracking architecture.}
-    \end{figure}
-\end{frame}
-
 \section{Evaluated Algorithms}
 
 \begin{frame}{Evaluated Reinforcement Learning Algorithms}
     \begin{block}{1. Double Q-Learning (Tabular)}
         \begin{itemize}
-            \item Decouples selection from evaluation using two independent tables ($Q_A$, $Q_B$).
-            \item Eliminates maximization bias under dense acoustic clutter.
+            \item \textbf{Selection}: A simple, computationally light baseline to validate the discrete state space; resolves maximization bias using two independent Q-tables.
+            \item \textbf{Behavior}: Converges quickly but suffers from track-stitching gaps due to discretization limits.
         \end{itemize}
     \end{block}
     \begin{block}{2. Linear Function Approximation (Linear FA)}
         \begin{itemize}
-            \item Maps continuous features using overlapping \textbf{Tile Coding} (2,048 dimensions).
-            \item Resolves boundaries cleanly, generalizing across fine-grained frequency drifts.
+            \item \textbf{Selection}: To handle continuous coordinate variables directly, mapping states using high-speed overlapping \textbf{Tile Coding} (5,184 dimensions; 4 tilings of $6^4$ tiles).
+            \item \textbf{Behavior}: Performed the best, achieving the highest cumulative rewards because it represents coordinate metrics continuously.
         \end{itemize}
     \end{block}
     \begin{block}{3. Actor-Critic (Stochastic Policy)}
         \begin{itemize}
-            \item Decouples policy ($\boldsymbol{\theta}$) from state value ($V$). Softmax selection allows soft, probabilistic associations in high signal attenuation.
+            \item \textbf{Selection}: Evaluated policy gradient methods on continuous features to support probabilistic associations under fading conditions.
+            \item \textbf{Behavior}: Suffered from early preference saturation due to large reward bounds. Bebehaved stably only after introducing reward scaling, gradient clipping, and preference centering.
         \end{itemize}
     \end{block}
 \end{frame}
@@ -257,7 +286,7 @@
 \begin{frame}{Experimental Results (Croatia 2407\_1 Dataset)}
     \begin{table}
         \centering
-        \caption{Quantitative agent metrics over 500 episodes.}
+        \caption{Quantitative agent metrics over 150 episodes.}
         \begin{tabular}{lcrrccc}
             \toprule
             \textbf{Agent} & \textbf{Cumul. Reward} & \textbf{Good Assoc} & \textbf{Bad Assoc} & \textbf{Dup Spawns} & \textbf{Vessels Found} \\
@@ -281,16 +310,16 @@
         \centering
         \begin{subfigure}[b]{0.48\textwidth}
             \centering
-            \includegraphics[width=\textwidth]{report/images/convergence_combined_500.png}
+            \includegraphics[width=\textwidth]{report/images/convergence_combined.png}
             \caption{Smoothed overall evaluation returns.}
         \end{subfigure}
         \hfill
         \begin{subfigure}[b]{0.48\textwidth}
             \centering
-            \includegraphics[width=\textwidth]{report/images/convergence_individual_500.png}
+            \includegraphics[width=\textwidth]{report/images/convergence_individual.png}
             \caption{Individual agent convergence curves.}
         \end{subfigure}
-        \caption{Comparison of training returns over 500 episodes.}
+        \caption{Comparison of training returns over 500 episodes (after fixing epsilon-decay bug).}
     \end{figure}
 \end{frame}
 
@@ -315,7 +344,7 @@
     \begin{block}{Summary}
         \begin{itemize}
             \item Formulated and validated an autonomous, self-supervised RL tracking framework.
-            \item Linear FA achieves the highest cumulative rewards due to continuous koordinat representation.
+            \item Linear FA achieves the highest cumulative rewards due to continuous coordinate representation.
             \item Decoupling MDP variables allows hot-swapping algorithms under a unified interface.
             \item Trained models for all evaluated architectures are available in the repository under \texttt{models/}.
         \end{itemize}
@@ -327,6 +356,37 @@
             \item Benchmark under severe jamming / active sonar interference scenarios.
         \end{itemize}
     \end{block}
+\end{frame}
+\begin{frame}{Interactive Playback \& Demonstration}
+    \begin{block}{How to Run Live Tracking Playback}
+        \begin{enumerate}
+            \item Execute evaluation script to stream frame updates:
+                \texttt{python run\_orchestrator.py --train-dataset croatia\_2407\_1 --episodes 150 --eval-datasets croatia\_2407\_1}
+            \item Open \texttt{viewer.html} in a web browser to view slideshow:
+                \begin{itemize}
+                    \item Runs a high-speed JavaScript slideshow (100ms interval) of the JPEGs.
+                    \item Animates dynamic spawning ($a=2$), frequency lock/associations ($a=1$), and fading protection in real-world time.
+                \end{itemize}
+        \end{enumerate}
+    \end{block}
+    \begin{block}{Visual Color Encodings}
+        \begin{itemize}
+            \item \textbf{Green boxes}: Centroid frequency trackers.
+            \item \textbf{Blue/Cyan lines}: Historical track trajectories.
+            \item \textbf{Red segments}: Fading/Doppler null segments protected by track age.
+        \end{itemize}
+    \end{block}
+\end{frame}
+
+\begin{frame}{Thank You \& Questions}
+    \centering
+    \Huge \textbf{Thank You!}
+    
+    \vspace{1.5em}
+    \Large \color{blue} Questions?
+    
+    \vspace{2.5em}
+    \normalsize \color{gray} Code Reference: \url{https://github.com/roy-michael/rl-vessel-detection}
 \end{frame}
 
 \end{document}

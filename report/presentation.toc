@@ -1,0 +1,7 @@
+\beamer@sectionintoc {1}{Introduction to Underwater Acoustics}{3}{0}{1}
+\beamer@sectionintoc {2}{Project Overview \& Motivation}{6}{0}{2}
+\beamer@sectionintoc {3}{System Architecture}{8}{0}{3}
+\beamer@sectionintoc {4}{Problem Formulation}{10}{0}{4}
+\beamer@sectionintoc {5}{Evaluated Algorithms}{14}{0}{5}
+\beamer@sectionintoc {6}{Experimental Results}{15}{0}{6}
+\beamer@sectionintoc {7}{Conclusion}{18}{0}{7}
