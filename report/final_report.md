@@ -27,14 +27,22 @@ This project presents a reinforcement learning (RL) framework for real-time dete
 ### 1.1 Motivation
 Passive sonar systems process continuous acoustic spectrum streams to monitor maritime traffic and detect underwater targets. Traditional methods rely heavily on manually tuned heuristic trackers (e.g., nearest-neighbor Kalman filters or constant-velocity models). However, marine environments are characterized by high levels of non-stationary noise (such as biological clicks, wave action, and wind clutter) and complex target dynamics. When a vessel shifts its speed, the fundamental frequency (tonal component) emitted by its propulsion system undergoes significant frequency drift. Heuristic thresholds are either too narrow (causing target loss during acceleration) or too wide (causing false associations with adjacent noise peaks). 
 
-### 1.2 Objectives
+### 1.2 Rationale: Why Reinforcement Learning for Sonar Tracking?
+
+Reinforcement Learning methodology was chosen for three reasons:
+
+1.  **Sequential Decision-Making Under Uncertainty**: Sonar tracking is not an independent classification task; decisions have long-term consequences. An incorrect `SPAWN` on a transient noise peak yields immediate clutter and forces subsequent duplicate association penalties. Conversely, a premature track termination during a vessel speed change requires a costly re-acquisition. RL is uniquely suited to optimize for *cumulative, long-term rewards*, balancing immediate association margins against future track stability.
+2.  **Dynamic Speed Adaptation**: When a vessel changes speed, its acoustic signature undergoes substantial frequency drift. Heuristic rules cannot distinguish between a drifting vessel track and a nearby new target. By framing the problem as an MDP, the agent learns to utilize the joint state space (distance, amplitude, and track age/tonality) to keep tracking a vessel through high-drift regions (associating with a discount) while rejecting spurious noise.
+3.  **State Space Simplification via Feature Encapsulation**: An end-to-end Deep RL network trying to learn raw spectrogram pixels would require millions of training samples and fail to converge. Our approach wraps classical signal processing (NMF and spectral clustering inside the `DSPOrchestrator`) to act as the environment. This strips away high-dimensional acoustic noise, reducing the state space to a highly compact 6 × 5 × 5 × 4 grid (600 discrete states). This encapsulation makes tabular RL algorithms like Double Q-Learning extremely robust, achieving fast convergence (under 20 episodes) and producing highly interpretable state-action profiles.
+
+### 1.3 Objectives
 This project refactors the traditional tracking system into a Reinforcement Learning process where it's primary objectives are:
 1. To formulate vessel detection and tracking as an MDP, by decoupling the state representation, decision actions, and reward rules.
 2.  To integrate trained RL policies into a structured tracking hierarchy consisting of a central DSP Orchestrator and dynamically spawned Vessel Track Processor instances.
 3. To evaluate and compare the RL algorithm families under proper training (500 episodes on the Croatia dataset) to demonstrate stable policy convergence.
 4. To establish a framework using audio files to produce outputs, displaying charts, timeline graphs, and text reports reflect real-world signal and detection characteristics.
 
-### 1.3 Data Collection & Experimental Setup
+### 1.4 Data Collection & Experimental Setup
 
 The acoustic dataset evaluated in this study was compiled from field trials conducted in two distinct marine environments during June and July 2025:
 1.  **Croatia Ocean Sonics Dataset (Silba Island)**: Comprising recordings from high-frequency hydrophones deployed near Zapadni Greben, Silba Island, Croatia. These recordings capture the acoustic signature of Suex VRX Diver Propulsion Vehicles (DPVs) along with standard surface vessels (e.g., small motorboats) to create realistic, overlapping interference scenarios.
@@ -67,74 +75,52 @@ Figure 1.1 shows the field experiment setup and trail in Silba, Croatia (Silba 1
 
 ---
 
-## 2. Introduction to Underwater Acoustics and Passive Detection
-
-Underwater acoustic propagation is the primary modality for underwater sensing, communication, and target tracking. Electromagnetic waves (such as light and radio waves) suffer from extreme attenuation in saline water, leaving acoustic waves (which travel at approximately $c \approx 1500$ m/s) as the only viable mechanism for long-range marine observation.
-
-### 2.1 Passive Sonar and Spectrograms
-Passive sonar systems listen to the sound radiated by targets without transmitting active pulses. The received time-domain pressure signal is converted to the time-frequency domain using the Short-Time Fourier Transform (STFT) to produce Low-Frequency Analysis and Recording (LOFAR) spectrograms. Within these spectrograms (as shown in Figure 2.1), target signatures manifest in two forms:
-*   **Broadband Background Noise**: Continuous, non-stationary noise distributed flatly across the spectrum, generated by wave action, wind, thermal activity, and shipping traffic.
-*   **Narrowband Tonals**: Highly concentrated horizontal lines generated by rotating machinery, engines, generators, and propeller blade rates. These tonals carry the unique acoustic signature of the vessel.
-
-### 2.2 Physical Challenges of Acoustic Tracking
-Acoustic vessel tracking is highly challenging due to several physical phenomena:
-1.  **Doppler Frequency Drift**: When a vessel moves relative to the hydrophone, the observed frequency shifts:
-    $$f_{\text{observed}} = f_0 \left( \frac{c \pm v_r}{c \mp v_s} \right)$$
-    where $v_s$ and $v_r$ are the source and receiver velocities. During vessel acceleration or turning maneuvers, these shifts cause the tonals to "slide" across frequency bins.
-2.  **Multipath Propagation & Echoes**: Acoustic waves reflect off both the sea surface and the seabed, creating multiple delayed paths. This results in parallel phantom tracks (multipath echoes) and harmonic overtones, as illustrated in Figure 2.1b.
-3.  **Acoustic Fading (Doppler Nulls)**: Destructive interference from multipath propagation causes temporary signal drops, requiring the tracking system to maintain track coherence through periods of zero-amplitude detections.
-
-<table style="width: 100%; border: none;">
-  <tr style="border: none;">
-    <td style="width: 60%; text-align: center; border: none; padding: 5px;">
-      <img src="./images/LOFAR_Joint_Signal.png" style="width: 100%;" />
-      <br>
-      <em>Figure 2.1a: Raw LOFAR spectrogram showing overlapping vessel target signatures and ambient noise.</em>
-    </td>
-    <td style="width: 40%; text-align: center; border: none; padding: 5px;">
-      <img src="./images/lofar_annotated.png" style="width: 100%;" />
-      <br>
-      <em>Figure 2.1b: Annotated LOFAR spectrogram showing base frequencies (green) and harmonics (orange/red).</em>
-    </td>
-  </tr>
-</table>
-
----
-
-## 3. Problem Formulation
+## 2. Problem Formulation
 
 The tracking task is formulated as a discrete-time Markov Decision Process (MDP) defined by the tuple ⟨<i>S</i>, <i>A</i>, <i>P</i>, <i>R</i>, <i>γ</i>⟩.
 
-### 3.1 State Space (<i>S</i>)
-The state representation is designed to capture the spatial and spectral relationship between a newly detected acoustic frequency peak and the existing target tracks. The raw continuous feature vector is:
-<div style="text-align: center; margin: 1em 0;"><b>s</b><sub>continuous</sub> = (<i>d</i><sub>Hz</sub>, <i>A</i>, <i>T</i>)</div>
+### 2.1 State Space (<i>S</i>)
+The state representation is designed to capture the spectral relationship and temporal characteristics between a newly detected acoustic frequency peak and the existing target tracks. The raw continuous feature vector is:
+<div style="text-align: center; margin: 1em 0;"><b>s</b> = (<i>d</i><sub>Hz</sub>, <i>A</i>, <i>T</i>, <i>age</i>)</div>
 where:
 *   <i>d</i><sub>Hz</sub>: The spectral distance (in Hz) from the detection's centroid frequency to the mean frequency of the closest active vessel tracking processor.
 *   <i>A</i>: The relative amplitude (activation weight) of the detection.
-*   <i>T</i>: The tonality score. Tonality measures how "mechanical" and continuous a sound is compared to random broadband noise. High tonality (<i>T</i> ≈ 1.0) suggests a clear motorboat engine or propeller, while low tonality (<i>T</i> ≈ 0.0) suggests transient ocean noise (e.g., crashing waves). See [Appendix B](#appendix-b-mathematics-of-tonality-spectral-flatness) for the mathematical definition based on Spectral Flatness.
+*   <i>T</i>: The tonality (or confidence) score. Tonality measures how "mechanical" and continuous a sound is compared to random broadband noise. See [Appendix B](#appendix-b-mathematics-of-tonality-spectral-flatness) for details.
+*   <i>age</i>: The continuous track age of the closest active vessel track in seconds.
 
-For tabular policies, the environment discretizes these continuous features into a state tuple <b>s</b><sub>discrete</sub> = (bin<sub>dist</sub>, bin<sub>amp</sub>, bin<sub>tonal</sub>):
-*   **Distance Bins**:
-    *   `0`: Very close (<i>d</i><sub>Hz</sub> ≤ 15.0 Hz)
-    *   `1`: Moderately close (<i>d</i><sub>Hz</sub> ≤ 45.0 Hz)
-    *   `2`: Far but potentially related (<i>d</i><sub>Hz</sub> ≤ 90.0 Hz)
-    *   `3`: Out of range / completely unrelated (<i>d</i><sub>Hz</sub> > 90.0 Hz)
-*   **Amplitude Bins**:
-    *   `0`: Low amplitude (<i>A</i> < 0.005)
-    *   `1`: Medium amplitude (0.005 ≤ <i>A</i> < 0.02)
-    *   `2`: High amplitude (<i>A</i> ≥ 0.02)
-*   **Tonality Bins**:
-    *   `0`: Likely noise (<i>T</i> < 0.45)
-    *   `1`: Moderate tonality (0.45 ≤ <i>T</i> < 0.65)
-    *   `2`: High tonality (<i>T</i> ≥ 0.65)
+For tabular policies, the environment discretizes these continuous features into a state tuple <b>s</b> = (bin<sub>dist</sub>, bin<sub>amp</sub>, bin<sub>tonal</sub>, bin<sub>age</sub>):
+*   **Distance Bins** (6 bins):
+    *   `0`: Very close (<i>d</i><sub>Hz</sub> ≤ 10.0 Hz)
+    *   `1`: Close (<i>d</i><sub>Hz</sub> ≤ 25.0 Hz)
+    *   `2`: Moderately close (<i>d</i><sub>Hz</sub> ≤ 45.0 Hz)
+    *   `3`: Medium distance (<i>d</i><sub>Hz</sub> ≤ 70.0 Hz)
+    *   `4`: Far but potentially related (<i>d</i><sub>Hz</sub> ≤ 100.0 Hz)
+    *   `5`: Out of range / completely unrelated (<i>d</i><sub>Hz</sub> > 100.0 Hz)
+*   **Amplitude Bins** (5 bins):
+    *   `0`: Very low amplitude (<i>A</i> < 0.003)
+    *   `1`: Low amplitude (0.003 ≤ <i>A</i> < 0.008)
+    *   `2`: Medium amplitude (0.008 ≤ <i>A</i> < 0.015)
+    *   `3`: High amplitude (0.015 ≤ <i>A</i> < 0.03)
+    *   `4`: Very high amplitude (<i>A</i> ≥ 0.03)
+*   **Tonality Bins** (5 bins):
+    *   `0`: Likely noise (<i>T</i> < 0.35)
+    *   `1`: Low tonality (0.35 ≤ <i>T</i> < 0.50)
+    *   `2`: Moderate tonality (0.50 ≤ <i>T</i> < 0.65)
+    *   `3`: High tonality (0.65 ≤ <i>T</i> < 0.80)
+    *   `4`: Very high tonality (<i>T</i> ≥ 0.80)
+*   **Track Age Bins** (4 bins):
+    *   `0`: Very young track / potentially temporary noise (<i>age</i> < 2.0 s)
+    *   `1`: Young track (2.0 ≤ <i>age</i> < 10.0 s)
+    *   `2`: Established track (10.0 ≤ <i>age</i> < 30.0 s)
+    *   `3`: Long-lived / mature track (<i>age</i> ≥ 30.0 s)
 
-### 3.2 Action Space (<i>A</i>)
+### 2.2 Action Space (<i>A</i>)
 At each step (upon receiving a valid acoustic peak), the agent selects from three discrete actions:
 1.  **REJECT (<i>a</i> = 0)**: Ignore the peak as ambient noise or clutter.
 2.  **ASSOCIATE (<i>a</i> = 1)**: Assign the peak observation to the nearest active tracking signal processor (updating its frequency tracking history and resetting its timeout).
 3.  **SPAWN (<i>a</i> = 2)**: Spawn a new `VesselTrackProcessor` child instance representing a newly discovered target.
 
-### 3.3 Reward Function (<i>R</i>)
+### 2.3 Reward Function (<i>R</i>)
 The reward function is located as part of the `TrackingRewardCalculator` class:
 *   **Reject Action**:
     *   *Correct Reject*: +2.0 (when ignoring distant/noise peaks).
@@ -149,32 +135,32 @@ The reward function is located as part of the `TrackingRewardCalculator` class:
     *   *Correct Spawn (High Tonal)*: +10.0 (starting a track on a strong, unassociated tonal peak).
     *   *Correct Spawn (Medium Tonal)*: +5.0 (starting a track on a moderate tonal peak).
 
-### 3.4 System Dynamics, Policy and Actions
+### 2.4 System Dynamics, Policy and Actions
 The formulation for this reinforcement learning problem considers the agent's **Policy (<i>π</i>)**, the **Actions (<i>a</i> ∈ <i>A</i>)**, and the **System Dynamics** (both the physical target motion and the environment's state transition probability <i>P</i>(<i>s'</i> | <i>s</i>, <i>a</i>)):
 *   **Policy (<i>π</i>)**: The policy dictates how the agent maps a given state (representing distance, amplitude, tonality, and track age) to one of the tracking actions. It represents the decision-making intelligence of the tracker.
 *   **Actions (<i>a</i>)**: These are the direct control options (REJECT, ASSOCIATE, SPAWN) available to the policy at each decision step.
 *   **State Transition Dynamics (<i>P</i>(<i>s'</i> | <i>s</i>, <i>a</i>))**: This defines how the tracking state updates as a consequence of the action taken under the current physical situation. For example, selecting `ASSOCIATE` on a nearby peak updates the target's frequency history, resetting its timeout and setting the next step's distance <i>d</i><sub>Hz</sub> to a low value (stabilizing the track), while selecting `REJECT` leaves the active tracks unchanged, allowing them to age or eventually time out.
 
-### 3.5 Types of Dynamics Evaluated in the Experiment
+### 2.5 Types of Dynamics Evaluated in the Experiment
 The tracking system operates over three main classes of physical target and acoustic dynamics:
 1.  **Constant-Velocity (Stable) Target Dynamics**: Represented by vessels travelling at a uniform speed. Acoustically, this corresponds to steady, narrow-band spectral lines with very low frequency drift. The optimal transition dynamics for these targets involve repeated, high-confidence `ASSOCIATE` actions, slowly increasing the track age.
 2.  **Accelerating/Drifting Target Dynamics (Speed Changes)**: When vessels accelerate or turn, Doppler shifts and engine load changes induce substantial frequency drift. In these dynamics, the transition distance <i>d</i><sub>Hz</sub> increases. The agent's dynamics must support transitioning from regular association to speed stage splitting to prevent track termination while avoiding false associations with surrounding clutter.
 3.  **Transient Acoustic Clutter & Noise Dynamics**: Characterized by high-amplitude, high-tonality peaks that persist for only a few frames. Because their active lifetime is short, incorporating **Track Age** into the state representation ensures the agent can distinguish these transients from true targets: a young track (low age) with weak tonality will have high transition probabilities to high-penalty states if the agent attempts to repeatedly associate with it.
 
-### 3.6 Reward Calculation & Training Protocol
-#### 3.6.1 The Training Loop
+### 2.6 Reward Calculation & Training Protocol
+#### 2.6.1 The Training Loop
 Training is executed via the `scripts/train_rl.py` script and follows a standard episodic reinforcement learning loop:
 1.  **Initialization**: The learning policy initializes its values, weights, or tables. If a saved policy file exists in the `models/` directory for the chosen agent and dataset, it is loaded to bootstrap training. Otherwise, the agent starts fresh with the following defaults:
     *   **Double Q-Learning**: When a discrete state tuple <b>s</b> is first visited, its values are set to zero in both Q-tables: <i>Q<sub>A</sub></i>(<b>s</b>, <i>a</i>) = 0.0 and <i>Q<sub>B</sub></i>(<b>s</b>, <i>a</i>) = 0.0 for all actions <i>a</i> ∈ {0, 1, 2}.
     *   **Actor-Critic**: On the first encounter of a state <b>s</b>, the Critic's state-value function is initialized to <i>V</i>(<b>s</b>) = 0.0, and the Actor's action preferences are initialized to <b>θ</b>(<b>s</b>) = [0.0, 0.0, 0.0]. Under the Softmax policy, this ensures a uniform action selection probability of ≈ 33.3% for all three options to maximize initial exploration.
-    *   **Linear FA**: The continuous feature weights matrix <b>w</b> (size 3 × 2048) is instantiated as a flat matrix of zeros: <i>w<sub>a, i</sub></i> = 0.0 for all actions <i>a</i> and tiling indices <i>i</i>.
+    *   **Linear FA**: The continuous feature weights matrix <b>w</b> (size 3 × 5184) is instantiated as a flat matrix of zeros: <i>w<sub>a, i</sub></i> = 0.0 for all actions <i>a</i> and tiling indices <i>i</i>.
 2.  **Episode Loop**: Over 500 training episodes, the script loads a sliding set of raw `.wav` recordings from the selected dataset (e.g., `croatia_2407_1`).
 3.  **Frame Streaming**: The low-level `Environment` streams spectral frames step-by-step. For each frame, the `DSPOrchestrator` performs NMF (see [Appendix A](#appendix-a-non-negative-matrix-factorization-nmf-in-sonar-processing) for mathematical definition and details) and extracts candidate peaks.
 4.  **<i>ε</i>-Greedy Action Selection**: The `RLAgent` observes the state <b>s</b><sub><i>t</i></sub> from the `TrackingMDPEnv`. With probability <i>ε</i> (which decays linearly from 1.0 down to 0.05 over the course of the episodes), the agent selects a random action to explore; otherwise, it greedily selects the action maximizing the estimated Q-value <i>a<sub>t</sub></i> = argmax<sub><i>a</i></sub> <i>Q</i>(<i>s<sub>t</sub></i>, <i>a</i>).
 5.  **Environment Transition**: The selected action is executed. The environment delegates track modifications to the `DSPOrchestrator` (spawning child agents or routing peaks) and returns the state transition <b>s</b><sub><i>t+1</i></sub> and reward <i>r<sub>t</sub></i>.
 6.  **Temporal Difference Update**: The policy performs a TD(0) value update using the transition tuple (<i>s<sub>t</sub></i>, <i>a<sub>t</sub></i>, <i>r<sub>t</sub></i>, <i>s<sub>t+1</sub></i>).
 
-#### 3.6.2 Action-Reward Resolution by Component
+#### 2.6.2 Action-Reward Resolution by Component
 
 The reward is computed step-by-step by the `TrackingRewardCalculator` within `TrackingMDPEnv`. The rewards and state modifications are resolved specifically based on the action chosen:
 
@@ -202,27 +188,27 @@ The reward is computed step-by-step by the `TrackingRewardCalculator` within `Tr
     *   **Correct Spawn - High Tonal (<i>r</i> = +10.0)**: If no close tracker exists and the peak is highly tonal (<i>T</i> ≥ 0.65), suggesting a clear engine tone.
     *   **Correct Spawn - Med Tonal (<i>r</i> = +5.0)**: If no close tracker exists and the peak is moderately tonal (<i>T</i> < 0.65).
 
-#### 3.6.3 Rationale and Choice of Reward Magnitudes
+#### 2.6.3 Rationale and Choice of Reward Magnitudes
 
 The reward numerical values were selected to create a balanced, zero-sum-like reward structure:
 
-1.  **Symmetric Baseline (±10.0)**: Maintaining a continuous track (Good Association) is the primary objective and yields the highest reward (`+10.0`). Conversely, missing a valid target (False Negative) or cluttering the DSP layer with duplicates yields an equal and opposite penalty (`-10.0`).
-2.  **Severe Illegal Penalties (-20.0)**: Attempting to associate to a non-existent track is mathematically invalid. This penalty is doubled to quickly collapse this illegal behavior during the agent's early exploration phase.
-3.  **Spawn Moderation (+5.0)**: Spawning a moderately tonal target yields `+5.0`. This reward must be strictly lower than the `+10.0` association reward. If spawning yielded a higher reward, the agent would learn a detrimental policy of constantly dropping tracks and spawning new ones to farm points.
-4.  **Lazy Policy Prevention (+2.0)**: Filtering background noise (Correct Reject) is necessary but trivial. It yields a very small positive baseline (`+2.0`). If this reward were higher, the agent would learn a "lazy" policy where it rejects every single peak to safely accumulate points without the risk of association penalties.
+1.  **Symmetric Baseline (±10.0)**: Maintaining a continuous track (Good Association) is the primary objective and yields the highest reward (`+10.0`). On the other hand, missing a valid target (False Negative) or cluttering the DSP layer with duplicates yields an equal and opposite penalty (`-10.0`).
+2.  **Severe Illegal Penalties (-20.0)**: Attempting to associate to a non-existent track is mathematically invalid. This penalty is doubled to quickly terminate this illegal behavior during the agent's early exploration phase.
+3.  **Spawn Moderation (+5.0)**: Spawning a moderately tonal target yields `+5.0`. This reward must be strictly lower than the `+10.0` association reward. If spawning yielded a higher reward, the agent would learn a detrimental policy of constantly dropping tracks and spawning new ones to continuously increase its score.
+4.  **Lazy Policy Prevention (+2.0)**: Filtering background noise (Correct Reject) is necessary but not the primary objective. It yields a very small positive baseline (`+2.0`). If this reward were higher, the agent would learn a "lazy" policy where it rejects every single peak to safely accumulate points and avoid any penalties.
 
-#### 3.6.4 Physical Logic Behind Tracking Rules
+#### 2.6.4 Physical Logic Behind Tracking Rules
 
 The action-reward framework directly models the physical realities of marine acoustics:
 *   **Association Logic (The Doppler Shift)**: A vessel moving at a constant speed emits a steady frequency. If the distance to a new spectral peak is very small (≤ 30 Hz), it strongly implies the same propeller spinning at the same RPM. If the distance is wider (30-65 Hz), it represents a **Speed Change / Doppler Drift**, where the vessel has accelerated or shifted relative to the hydrophone, causing a frequency slide. The agent learns to stitch these slides together rather than dropping the track.
 *   **Duplication Logic (Echoes & Harmonics)**: Acoustic waves bounce off the sea floor and surface, causing multipath echoes or harmonic overtones that appear very close to the true frequency on the spectrogram. The Duplicate Spawn penalty (-10.0 if ≤ 35 Hz from an active track) forces the agent to realize that two overlapping, parallel frequencies are actually the exact same physical boat, and it should not spawn duplicate trackers for them.
 *   **Spawn Logic (New Targets)**: A completely new, unassociated peak that remains highly tonal (<i>T</i> ≥ 0.65) strongly implies a brand-new vessel entering the acoustic radius of the hydrophone, requiring a new tracker.
 
-### 3.7 Hyperparameter Configuration & Tuning
+### 2.7 Hyperparameter Configuration & Tuning
 
-To achieve stable policy convergence and robust vessel tracking across diverse datasets, we conducted a systematic grid search and empirical tuning of the algorithm-specific hyperparameters. 
+To ensure stable policy convergence and robust trajectory reconstruction across the varied marine environments in our datasets, we optimized the algorithm-specific hyperparameters using a combination of systematic grid search and empirical validation.
 
-#### 3.7.1 Hyperparameter Summary Table
+#### 2.7.1 Hyperparameter Summary Table
 
 The table below outlines the final tuned hyperparameters utilized across the evaluated reinforcement learning paradigms:
 
@@ -239,7 +225,7 @@ The table below outlines the final tuned hyperparameters utilized across the eva
 | **Actor Learning Rate (<i>α</i><sub><i>θ</i></sub>)** | Actor-Critic Policy | `0.05` | Evaluated [0.01, 0.1]. Normalised lower than the critic to ensure policy change is gradual. |
 | **Critic Learning Rate (<i>α</i><sub><i>w</i></sub>)** | Actor-Critic Policy | `0.1` | Evaluated [0.05, 0.2]. Faster rate to keep the state-value estimates responsive to tracking changes. |
 
-#### 3.7.2 Tuning Methodology & Rationale
+#### 2.7.2 Tuning Methodology & Rationale
 
 1.  **Discount Factor (<i>γ</i>) Selection**: Underwater acoustic targets are characterized by temporary fading and brief signal drops. A low discount factor (<i>γ</i> < 0.7) makes the agent shortsighted, causing it to quickly reject a fading target. A high discount factor (<i>γ</i> ≥ 0.9) successfully guides the agent to perform `ASSOCIATE` actions even when local peak amplitudes decrease temporarily, maintaining track continuity.
 2.  **Linear FA Weight Normalization**: Because tile coding maps a continuous coordinate to <i>n</i><sub>tilings</sub> = 4 active binary features simultaneously, updating the weights directly with a standard learning rate causes extreme oscillations. Dividing the learning rate by the number of active tilings (<i>α</i><sub>FA</sub> = <i>α</i> / <i>n</i><sub>tilings</sub>) normalizes the gradient step, facilitating smooth value approximation.
@@ -247,24 +233,24 @@ The table below outlines the final tuned hyperparameters utilized across the eva
 
 ---
 
-## 4. System Architecture & Code Hierarchy
+## 3. System Architecture & Code Hierarchy
 
 The project is structured into a modular hierarchy that separates the environment dynamics, state representations, reward logic, and policy algorithms.
 
-### 4.1 Environment Layer (`core/environment/`)
+### 3.1 Environment Layer (`core/environment/`)
 The physical acoustics and state transitions are handled by the following components:
-*   **`acoustic_data_streamer.py`**: Manages the low-level acoustic pipeline, utilizing an asynchronous buffer and STFT caching mechanism (`.npy` matrices) to stream raw audio frames into normalized spectral data without blocking the main event loop.
+*   **`acoustic_data_streamer.py`**: Manages the low-level acoustic pipeline, utilizing an asynchronous buffer and Short-Time Fourier Transform (STFT) caching mechanism (`.npy` matrices) to stream raw audio frames into normalized spectral data without blocking the main event loop.
 *   **`tracking_mdp_env.py`**: Acts as the standard MDP interface, observing acoustic data, calculating the continuous and discrete **State (<i>S</i>)** representations, executing the **Actions (<i>A</i>)** requested by the agent, and calculating the resulting **Reward (<i>R</i>)** via the isolated `TrackingRewardCalculator`.
 
-### 4.2 Agent Layer (`core/agent/`)
+### 3.2 Agent Layer (`core/agent/`)
 The agent hierarchy handles target tracking and decision execution:
 *   **`dsp_orchestrator.py`**: The orchestration layer. It manages NMF background updates and routes newly detected acoustic peaks to the appropriate tracker.
 *   **`vessel_track_processor.py`**: Individual vessel tracking agents spawned dynamically by the dispatcher. Each instance represents an independent tracked vessel target.
 
-### 4.3 Policy Layer (`core/agent/policy/`)
+### 3.3 Policy Layer (`core/agent/policy/`)
 The **Policies (<i>π</i>)** represent the algorithms that drive the agents, each utilizing different learning strategies. This allows for easy hot-swapping of learning algorithms. The available policies (e.g., `q_learning_policy.py`, `sarsa_policy.py`, `double_q_learning_policy.py`, `actor_critic_policy.py`) ingest the state tuples generated by the environment and output discrete actions.
 
-### 4.4 RL-DSP System Architecture & Class Mapping
+### 3.4 RL-DSP System Architecture & Class Mapping
 
 The architectural choice was to use the central DSP orchestrator as the physical environment wrapper for the RL decision-making agent, where the orchestrator manages the NMF updates and routes newly detected acoustic peaks to the appropriate tracker. The decision-making logic (RL agent) is handled separately by the `RLAgent` class. 
 This explicit boundary allows the continuous, deterministic spectral processing to run independently from the discrete, stochastic decision-making logic of the RL agent. 
@@ -278,18 +264,18 @@ This explicit boundary allows the continuous, deterministic spectral processing 
 
 To establish a clear mapping between the software components and the theoretical Reinforcement Learning framework, we define the functional roles of all classes:
 
-#### 4.4.1 Environment Definitions
-1.  **`Environment` (Acoustic Data Streamer)**: This class represents the low-level physical environment. It reads the raw `.wav` hydrophone recordings, manages the STFT (Short-Time Fourier Transform) frame buffer, and tracks the global maximum amplitude. It has no decision-making capabilities and its purpose is to simulate the real-time acoustic signal feed.
-2.  **`TrackingMDPEnv` (Markov Decision Process Wrapper)**: This is the formal RL environment conforming to standard MDP dynamics. It wraps around the acoustic processor, ingests the extracted spectral peaks, computes the discrete state representations <b>s</b><sub><i>t</i></sub> = (bin<sub>dist</sub>, bin<sub>amp</sub>, bin<sub>tonal</sub>), executes the agent's actions, and returns the step-wise rewards calculated by the isolated `TrackingRewardCalculator`.
+#### 3.4.1 Environment Definitions
+1.  **`Environment` (Acoustic Data Streamer)**: This class represents the low-level physical environment. It reads the raw `.wav` hydrophone recordings, manages the Short-Time Fourier Transform (STFT) frame buffer, and tracks the global maximum amplitude. It has no decision-making capabilities and its purpose is to simulate the real-time acoustic signal feed.
+2.  **`TrackingMDPEnv` (Markov Decision Process Wrapper)**: This is the formal RL environment conforming to standard MDP dynamics. It wraps around the acoustic processor, ingests the extracted spectral peaks, computes the discrete state representations <b>s</b><sub><i>t</i></sub> = (bin<sub>dist</sub>, bin<sub>amp</sub>, bin<sub>tonal</sub>, bin<sub>age</sub>), executes the agent's actions, and returns the step-wise rewards calculated by the isolated `TrackingRewardCalculator`.
 
-#### 4.4.2 Agent & Processor Definitions
+#### 3.4.2 Agent & Processor Definitions
 1.  **`DSPOrchestrator` (DSP Orchestrator)**: The primary central component. It acts as the physical environment wrapper from the perspective of the RL policy. It runs the NMF model on the STFT buffer, extracts candidate peak frequencies, executes real-time spectral clustering to group harmonics, and controls the creation or deletion of tracking files.
 2.  **`VesselTrackProcessor` (Dynamic Track Processors)**: Dynamically spawned data structures managed by the `DSPOrchestrator`. Each instance represents a single tracked physical target (vessel) in the frequency domain, maintaining its own history of centroids, standard deviations, amplitudes, and track lifetime.
 3.  **`RLAgent` (Decision Engine)**: The single learning agent containing the active policy. It receives state representations from `TrackingMDPEnv`, queries the mathematical policy (e.g., Q-Table or Linear Weights) to select the optimal tracking action, and triggers the update loop during training.
 
 ---
 
-### 4.5 RL-Environment Interaction Workflow
+### 3.5 RL-Environment Interaction Workflow
 
 The interaction between these components forms a nested, hierarchical feedback loop:
 
@@ -302,24 +288,16 @@ The interaction between these components forms a nested, hierarchical feedback l
     *   If `ASSOCIATE`, the peak is routed to the corresponding `VesselTrackProcessor` to update its internal trajectory statistics.
 5.  **Feedback Loop**: The reward <i>r<sub>t</sub></i> is calculated, and the state transition updates to <i>s<sub>t+1</sub></i> based on the new target tracks configuration.
 
----
 
-### 4.6 Rationale: Why Reinforcement Learning for Sonar Tracking?
 
-Reinforcement Learning methodology was chosen for three reasons:
-
-1.  **Sequential Decision-Making Under Uncertainty**: Sonar tracking is not an independent classification task; decisions have long-term consequences. An incorrect `SPAWN` on a transient noise peak yields immediate clutter and forces subsequent duplicate association penalties. Conversely, a premature track termination during a vessel speed change requires a costly re-acquisition. RL is uniquely suited to optimize for *cumulative, long-term rewards*, balancing immediate association margins against future track stability.
-2.  **Dynamic Speed Adaptation**: When a vessel changes speed, its acoustic signature undergoes substantial frequency drift. Heuristic rules cannot distinguish between a drifting vessel track and a nearby new target. By framing the problem as an MDP, the agent learns to utilize the joint state space (distance, amplitude, and track age/tonality) to keep tracking a vessel through high-drift regions (associating with a discount) while rejecting spurious noise.
-3.  **State Space Simplification via Feature Encapsulation**: An end-to-end Deep RL network trying to learn raw spectrogram pixels would require millions of training samples and fail to converge. Our approach wraps classical signal processing (NMF and spectral clustering inside the `DSPOrchestrator`) to act as the environment. This strips away high-dimensional acoustic noise, reducing the state space to a highly compact 4 × 3 × 3 grid. This encapsulation makes tabular RL algorithms like Double Q-Learning extremely robust, achieving fast convergence (under 20 episodes) and producing highly interpretable state-action profiles.
-
-### 4.7 Heuristic Fallback Tracking (Non-RL Mode)
+### 3.6 Heuristic Fallback Tracking (Non-RL Mode)
 
 If a trained RL policy file is not found or the tracker is explicitly instantiated without an RL agent, the `DSPOrchestrator` defaults to a **deterministic, rule-based heuristic tracking system**. This fallback behavior relies on hardcoded frequency distance thresholds rather than learned Q-values.
 
 
 ---
 
-## 5. Methodology & Algorithms
+## 4. Methodology & Algorithms
 
 We implement and evaluate three distinct reinforcement learning algorithms to solve this tracking MDP.
 
@@ -330,7 +308,15 @@ To prevent maximization bias (overestimating Q-values due to the max operator in
 ### 5.2 Linear Function Approximation (Linear FA)
 For continuous state spaces, we represent the action-value function as a linear combination of features:
 <div style="text-align: center; margin: 1em 0;"><i>Q̂</i>(<i>s</i>, <i>a</i>, <b>w</b>) = <b>w</b><sub><i>a</i></sub><sup>T</sup> <b>φ</b>(<i>s</i>)</div>
-where <b>φ</b>(<i>s</i>) is a 2,048-dimensional sparse binary feature vector generated using a overlapping **Tile Coding** structure across the continuous features (<i>d</i><sub>Hz</sub>, <i>A</i>, <i>T</i>).
+where <b>φ</b>(<i>s</i>) is a 5,184-dimensional sparse binary feature vector generated using an overlapping **Tile Coding** structure across the continuous features (<i>d</i><sub>Hz</sub>, <i>A</i>, <i>T</i>, <i>age</i>). 
+
+The dimensionality of 5,184 is calculated as follows:
+$$\text{Dimensionality} = n_{\text{tilings}} \times (n_{\text{tiles}})^{d} = 4 \times 6^4 = 5,184$$
+where:
+*   $n_{\text{tilings}} = 4$ is the number of overlapping tilings.
+*   $n_{\text{tiles}} = 6$ is the number of partition tiles per dimension.
+*   $d = 4$ is the number of tiled continuous state variables (spectral distance $d_{\text{Hz}}$, amplitude $A$, tonality $T$, and track age $age$).
+
 *   *Update rule*: <b>w</b><sub><i>a</i></sub> ← <b>w</b><sub><i>a</i></sub> + <i>α</i> <i>δ</i> <b>φ</b>(<i>s</i>) where <i>δ</i> is the semi-gradient TD error.
 
 ### 5.3 Actor-Critic Policy
@@ -362,11 +348,11 @@ To optimize tracking performance, we analyzed the policies to assess their suita
 
 ---
 
-## 6. Experimental Results (Croatia 2407_1 Dataset)
+## 5. Experimental Results (Croatia 2407_1 Dataset)
 
 All agents were trained for 500 episodes on the `Croatia 2407_1` dataset. Below is the quantitative results and analysis.
 
-### 6.1 Comparative Metrics Table
+### 5.1 Comparative Metrics Table
 
 | Agent | Cumulative Reward | Good Association | Bad Association | Bad Assoc % | Duplicate Spawns | Correct Spawns | Vessels Found |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -378,7 +364,7 @@ All agents were trained for 500 episodes on the `Croatia 2407_1` dataset. Below 
 *Figure 5.1: Comparative tracking metrics for the evaluated agents on the Croatia 2407_1 dataset.*
 
 
-### 6.2 Training Convergence
+### 5.2 Training Convergence
 
 The training convergence profile shows the policy performance across **500 episodes**. During training, each reinforcement learning algorithm (Double Q-Learning, Linear FA, and Actor-Critic) was trained to optimize the step-wise peak association decisions:
 1.  **Double Q-Learning**: Converges rapidly within 15–20 episodes to a stable, near-optimal policy, effectively eliminating maximization bias in noisy soundscapes.
@@ -390,23 +376,49 @@ By plotting the greedy evaluation reward (<i>ε</i> = 0) alongside the noisy tra
 ![Training Convergence Individual Plot Grid](./images/convergence_individual_500.png)
 *Figure 5.3: Individual RL Agent Convergence Curves showing raw training returns and smoothed policy updates.*
 
-### 6.3 Trajectory Reconstruction & Timelines
+### 5.3 Trajectory Reconstruction & Timelines
 The timeline plots display tracked vessels mapped to absolute real time (HH:MM:SS format parsed from the filenames). Double Q-Learning shows highly stable track consolidation with minimal identity swaps:
 
 ![Vessel Timeline Chart](./images/croatia_2407_1_double_q_learning_timeline.png)
 *Figure 5.4: Reconstructed Vessel Timeline (Double Q-Learning) mapped to absolute real-world time on the Croatia 2407_1 dataset.*
 
+#### 5.3.1 Timeline Plot Structure and Interpretation
+
+The timeline plot provides a comprehensive visual representation of the tracking process and the reinforcement learning agent's decision-making history:
+
+1. **Axes and Coordinates**:
+   - **X-Axis (Real Time)**: Displays absolute wall-clock time (`HH:MM:SS`) parsed from the source WAV recordings.
+   - **Y-Axis (Frequency)**: Shows the acoustic signal frequency in Hertz (Hz), highlighting tracked target signatures within the target spectrum band.
+   - **Secondary X-Axis (KDE Density)**: Plotted at the top of the figure to map the Kernel Density Estimate (KDE) of the vessel frequencies.
+
+2. **Visual Track Elements**:
+   - **Solid Colored Line (`-`)**: Represents a completed/stable segment of a tracked vessel's mean frequency.
+   - **Dashed Colored Line (`--`)**: Represents an active (currently being tracked) vessel's mean frequency.
+   - **Shaded Area (of the same color)**: Represents the standard deviation/variance ($\pm \sigma$) around the mean frequency to show frequency dispersion or speed fluctuations.
+   - **Dotted Line (`:`)**: Represents connections between chronologically sequential speed stages (segments) under the same Vessel ID.
+   - **Thin/Transparent Line**: Represents background noise or transient targets that did not meet the dominant target threshold (under 180 seconds of total tracked duration).
+   - **Vertical Red Dashed Line**: Indicates the current time cursor of the analysis.
+
+3. **RL Action Marks (Scatter Points)**:
+   - **Green Circles (`o`)**: Correct decisions. These mark peaks that were correctly classified as a spawn/association (e.g. `correct_spawn`, `good_association`). If the run is long, they are rendered sparsely to keep the plot legible.
+   - **Red Crosses (`x`)**: False Negatives (Misses). These mark tonal target signature peaks that the agent ignored (selected `REJECT`).
+   - **Orange Triangles (`^`)**: Duplicate Spawns. These mark peaks where the agent incorrectly selected `SPAWN` despite an active track already existing nearby.
+   - **Magenta Squares (`s`)**: Bad Associations. These mark peaks where the agent incorrectly associated a peak with a distant track or made an invalid association.
+
+4. **Marginal KDE Plot (Y-axis projection)**:
+   - **Purple Density Line & Shading**: Plotted on the secondary x-axis (top) to show the Kernel Density Estimate (KDE) of the dominant tracked frequencies across the entire duration. This helps visually locate the main tonal frequency bands of the vessels.
+
 
 ---
 
-## 7. Discussion & Limitations
+## 6. Discussion & Limitations
 
 1.  **Tabular Robustness**: Due to the compact state space (4 × 3 × 3 bins), tabular Q-Learning converges extremely fast (within 15 episodes) and demonstrates the highest tracking efficiency, achieving a stable cumulative reward plateau.
 2.  **Linear FA Sensitivity**: While continuous Tile Coding allows the agent to generalise across fine-grained variations in amplitude and frequency drift, it is highly sensitive to the chosen learning rate (<i>α</i>). Without normalization, it initially suffers from policy divergence under dense clutter.
 3.  **Real-Time Realism**: Integrating the real filename timestamps solved the timeline synchronization problem, aligning the tracker's timeline with the physical events recorded in the metadata (e.g. vessel passing and speed changes).
 4.  **Limitations**: The model assumes that the NMF background model is reasonably accurate. Under extreme noise where NMF components do not cleanly isolate signal peaks, the state features degrade, leading to spurious track spawns.
 
-### 7.1 Convergence Dynamics & Visualizations
+### 6.1 Convergence Dynamics & Visualizations
 
 When analyzing the training convergence graphs, two distinct visual phenomena occur due to the mechanics of the acoustic tracking environment and exploration strategies:
 
@@ -428,7 +440,7 @@ The Linear Function Approximation agent struggles to stabilize its convergence b
 
 
 
-### 7.2 Comparison to Existing Work
+### 6.2 Comparison to Existing Work
 
 Traditional Passive Acoustic Monitoring (PAM) systems rely heavily on energy-based or cyclostationarity-based detectors. Common shipping traffic detection schemes utilize envelope demodulation techniques (DEMON) or second-order cyclic spectral analysis, such as the Adaptive Weighted Envelope Spectrum (AWES), to isolate shipping machinery tonals from background clutter ([Gao et al., 2021](#10-references); [Tong et al., 2024](#10-references)). However, URN from standard vessels is dominated by broadband cavitation noise, making DPV signature extraction significantly more challenging due to DPVs' quiet electric motors and low-power, narrowband Pulse-Width Modulated (PWM) emissions ([Kita, 2022](#10-references)).
 
@@ -440,7 +452,7 @@ Our Reinforcement Learning and NMF tracking framework addresses these limitation
 
 ---
 
-## 8. Conclusion
+## 7. Conclusion
 
 
 We have successfully designed, implemented, and evaluated a reinforcement learning vessel tracking system. Decoupling the MDP variables (State, Action, and Reward Calculator) allowed us to benchmark multiple RL algorithms under a unified interface. Our Double Q-Learning agent successfully converges within 500 episodes on the `Croatia 2407_1` dataset. The absolute time integration maps tracking timelines directly to real-world clock times (HH:MM:SS), confirming that reinforcement learning offers a highly viable, robust alternative to heuristic tracker architectures.
@@ -448,11 +460,14 @@ We have successfully designed, implemented, and evaluated a reinforcement learni
 ---
 
 
-## 9. Project Setup, Requirements, and Execution Guide
+## 8. Project Setup, Requirements, and Execution Guide
 
 To ensure reproducibility, this section outlines the system requirements, environment configuration, and execution instructions for training, evaluation, and verification.
 
-### 9.1 Requirements & Dependencies
+> [!NOTE]
+> Due to the extremely large size of the raw acoustic datasets (lossless continuous `.wav` recordings), the audio files are not included in the standard repository. They will be provided separately on demand.
+
+### 8.1 Requirements & Dependencies
 
 The project is built on **Python 3.10+** (tested and verified up to Python 3.14). The external libraries required are listed in `requirements.txt`:
 *   `librosa` (~=0.11.0): For spectrogram extraction, feature mapping, and acoustic analysis.
@@ -467,7 +482,7 @@ To install dependencies, run:
 pip install -r requirements.txt
 ```
 
-### 9.2 Environment Setup
+### 8.2 Environment Setup
 
 The dataset directory path is specified dynamically using the `RECORDINGS_DIR` environment variable. Before executing scripts, configure this variable to point to the base directory of your recordings (e.g., containing the `Croatia` and `DepartmentalCruise-2025-06-12` directories):
 
@@ -480,7 +495,7 @@ $env:RECORDINGS_DIR="D:/RoyStudies/Recordings"
 export RECORDINGS_DIR="/path/to/Recordings"
 ```
 
-### 9.3 Pre-trained Models Availability
+### 8.3 Pre-trained Models Availability
 
 The repository includes pre-trained models for all evaluated agent architectures and datasets under the `models/` directory (e.g., `models/croatia_2307/` and `models/croatia_2407_1/`). These models are serialized as `.json` files (for tabular policies like Double Q-learning and Actor-Critic) or `.npy` files (for Linear Function Approximation weights).
 
@@ -488,12 +503,12 @@ If a saved policy file exists in the `models/` directory for the chosen agent an
 
 ---
 
-### 9.4 Running Reinforcement Learning Training
+### 8.4 Running Reinforcement Learning Training
 
-The tracking system relies on two distinct training scripts, designed following the **Single Responsibility Principle** to separate development workflows from reporting pipelines:
+The tracking system relies on two distinct training scripts, to separate development workflows from reporting pipelines:
 
 1.  `run_training.py`: Purely dedicated to the RL training loop for a single agent. Useful for fast iteration, debugging, and hyperparameter tuning.
-2.  `run_orchestrator.py`: An end-to-end orchestration pipeline. It trains all agents in parallel, evaluates them, parses their reports, and generates complex comparative dashboards (e.g., `convergence_combined.png`).
+2.  `run_orchestrator.py`: An end-to-end orchestration script. It trains all agents in parallel, evaluates them, parses their reports, and generates comparative dashboards (e.g., `convergence_combined.png`).
 
 #### 1. End-to-End Evaluation Pipeline (`run_orchestrator.py`)
 
@@ -524,7 +539,7 @@ The trained policy is serialized and saved in the target `models/` or `output/` 
 
 ---
 
-### 9.5 Running Evaluation & Timeline Generation
+### 8.5 Running Evaluation & Timeline Generation
 
 Once policies are trained, you can evaluate a specific agent's policy on any of the evaluated datasets to trace trajectories, detect speed stage shifts, and save the absolute time timeline graph.
 
@@ -547,7 +562,7 @@ The script outputs:
 
 ---
 
-### 9.6 Batch Evaluation Procedure: All Datasets, All Agents (using `croatia_2407_1` policy)
+### 8.6 Batch Evaluation Procedure: All Datasets, All Agents (using `croatia_2407_1` policy)
 
 To evaluate **all agents** across **all datasets** using the policies trained on `croatia_2407_1`, follow this two-step procedure:
 
@@ -571,7 +586,7 @@ This command will:
 
 ---
 
-### 9.7 Running Automated Verification Suite (Self-Training Loop)
+### 8.7 Running Automated Verification Suite (Self-Training Loop)
 
 To run training and self-evaluation in batch across all six datasets sequentially (training each dataset on itself):
 ```bash
@@ -599,7 +614,8 @@ To find the optimal matrices, we minimize the Kullback-Leibler (KL) divergence, 
 using multiplicative update rules derived from the gradient of the divergence.
 
 ### A.2 Application to Vessel Tracking
-Spectrograms contain highly overlapping signals (multiple vessels operating simultaneously) masked by ambient ocean noise. The raw and annotated spectrograms are displayed in Figure 2.1 in Section 2, marking key tonality elements.
+
+Spectrograms contain highly overlapping signals (multiple vessels operating simultaneously) masked by ambient ocean noise. The raw and annotated spectrograms are displayed in Figure C.1 in Appendix C, marking key tonality elements.
 
 #### Identifying Tonality Signals and Harmonics in LOFAR Spectrograms
 
@@ -646,3 +662,36 @@ Tonality (T) = 1.0 - Spectral Flatness
 **Why this accurately separates targets from noise:**
 1.  **For Random Ocean Noise:** Noise is "broadband"—its energy is spread out flatly and evenly across all frequencies. Because the energy is flat, the Geometric Mean is almost exactly equal to the Arithmetic Mean. This yields a `Flatness ≈ 1.0`. Therefore, **`T = 1.0 - 1.0 = 0.0` (Low Tonality)**.
 2.  **For a Vessel Engine:** An engine emits a pure mechanical tone, meaning almost all of its energy is concentrated into a single massive spike at one specific fundamental frequency. The surrounding frequencies are near zero. The near-zero values drag the Geometric mean down drastically, while the single spike keeps the Arithmetic mean high. This yields a `Flatness ≈ 0.0`. Therefore, **`T = 1.0 - 0.0 = 1.0` (High Tonality)**.
+
+---
+### Appendix C: Introduction to Underwater Acoustics and Passive Detection
+
+Underwater acoustic propagation is the primary modality for underwater sensing, communication, and target tracking. Electromagnetic waves (such as light and radio waves) suffer from extreme attenuation in saline water, leaving acoustic waves (which travel at approximately $c \approx 1500$ m/s) as the only viable mechanism for long-range marine observation.
+
+#### C.1 Passive Sonar and Spectrograms
+Passive sonar systems listen to the sound radiated by targets without transmitting active pulses. The received time-domain pressure signal is converted to the time-frequency domain using the Short-Time Fourier Transform (STFT) to produce Low-Frequency Analysis and Recording (LOFAR) spectrograms. Within these spectrograms (as shown in Figure C.1), target signatures manifest in two forms:
+*   **Broadband Background Noise**: Continuous, non-stationary noise distributed flatly across the spectrum, generated by wave action, wind, thermal activity, and shipping traffic.
+*   **Narrowband Tonals**: Highly concentrated horizontal lines generated by rotating machinery, engines, generators, and propeller blade rates. These tonals carry the unique acoustic signature of the vessel.
+
+#### C.2 Physical Challenges of Acoustic Tracking
+Acoustic vessel tracking is highly challenging due to several physical phenomena:
+1.  **Doppler Frequency Drift**: When a vessel moves relative to the hydrophone, the observed frequency shifts:
+    $$f_{\text{observed}} = f_0 \left( \frac{c \pm v_r}{c \mp v_s} \right)$$
+    where $v_s$ and $v_r$ are the source and receiver velocities. During vessel acceleration or turning maneuvers, these shifts cause the tonals to "slide" across frequency bins.
+2.  **Multipath Propagation & Echoes**: Acoustic waves reflect off both the sea surface and the seabed, creating multiple delayed paths. This results in parallel phantom tracks (multipath echoes) and harmonic overtones, as illustrated in Figure C.1b.
+3.  **Acoustic Fading (Doppler Nulls)**: Destructive interference from multipath propagation causes temporary signal drops, requiring the tracking system to maintain track coherence through periods of zero-amplitude detections.
+
+<table style="width: 100%; border: none;">
+  <tr style="border: none;">
+    <td style="width: 60%; text-align: center; border: none; padding: 5px;">
+      <img src="./images/LOFAR_Joint_Signal.png" style="width: 100%;" />
+      <br>
+      <em>Figure C.1a: Raw LOFAR spectrogram showing overlapping vessel target signatures and ambient noise.</em>
+    </td>
+    <td style="width: 40%; text-align: center; border: none; padding: 5px;">
+      <img src="./images/lofar_annotated.png" style="width: 100%;" />
+      <br>
+      <em>Figure C.1b: Annotated LOFAR spectrogram showing base frequencies (green) and harmonics (orange/red).</em>
+    </td>
+  </tr>
+</table>
