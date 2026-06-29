@@ -334,17 +334,17 @@ A critical architectural decision was utilizing **one-step TD control** (TD(0)) 
 
 ### 5.5 Policy Fitment Analysis
 
-To optimize tracking performance, we analyzed the policies to assess their suitability for acoustic vessel tracking:
+To assess their suitability for acoustic vessel tracking, we analyzed the following policies:
 
 1.  **Double Q-Learning (Best Tabular Baseline)**
     *   **Fitment**: **High**.
-    *   **Rationale**: Passive sonar spectrograms are plagued by ambient ocean noise, localized bubbles, and transient biological signals. These transients produce spurious, high-magnitude peak observations that simulate valid vessel targets. In standard Q-learning, the maximization operator (max<sub><i>a'</i></sub>) systematically overestimates the value of these noise transitions (maximization bias). Double Q-learning mitigates this by decoupling action selection from value estimation. By maintaining separate value tables, it prevents the tracker from chasing noisy spikes, resulting in the most stable tabular trajectory reconstruction.
+    *   Mitigates maximization bias caused by biological transients and ambient ocean noise in passive sonar spectrograms. By decoupling action selection from value estimation, it prevents the tracker from erroneously chaining spurious high-magnitude noise peaks, yielding stable tabular tracking in cluttered sea environments.
 2.  **Linear Function Approximation with Tile Coding (Continuous State-Space Solver)**
     *   **Fitment**: **High (Primary Solver)**.
-    *   **Rationale**: Vessel velocities change continuously, causing smooth Doppler shifts and gradual frequency transitions. Discretizing these continuous spectral features (<i>d</i><sub>Hz</sub>, <i>A</i>, <i>T</i>) into coarse tabular bins introduces boundary discretization artifacts: an agent might behave erratically when a target hovers on the edge of two bins. Linear FA with multi-tiled coding resolves this by mapping continuous states to overlapping offsets. This allows the tracker to generalize smoothly across continuous frequency drifts and amplitude fluctuations, which is essential for tracking rapid velocity-induced transitions.
+    *   Resolves discretization artifacts by mapping continuous spectral features to overlapping tiles. This enables smooth generalization across gradual Doppler shifts and velocity-induced frequency transitions, which are characteristic of continuous vessel movement in the ocean.
 3.  **Actor-Critic (Stochastic Policy Representative)**
     *   **Fitment**: **High**.
-    *   **Rationale**: Acoustic tracking involves significant state ambiguity (e.g., a candidate peak could represent a distant target, a fading vessel harmonic, or ambient noise). Tabular Q-learning or SARSA enforce hard, deterministic action choices, which can cause erratic track-spawning or premature track-dropping cycles under high signal attenuation. Actor-Critic maintains a parameterized softmax preference distribution over actions. This soft policy allows the tracker to make probabilistic associations in high-noise regions, maintaining weak tracks longer and exploring transitions smoothly without rigid hard-threshold switching.
+    *   Uses a soft probabilistic policy to handle state ambiguity caused by high signal attenuation or fading harmonics. This allows the agent to maintain weak vessel tracks longer in high-noise acoustic regions without rigid switching, adapting better to unpredictable underwater propagation.
 
 ---
 
