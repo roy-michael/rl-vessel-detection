@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body { margin: 0; background: #1a1a2e; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+        img { max-width: 100%; max-height: 100vh; object-fit: contain; }
+    </style>
+</head>
+<body>
+<img id="viewer" src="" />
+<script>
+let i = 0;
+let max_errors = 50;
+let errors = 0;
+setInterval(() => {
+    let img = new Image();
+    img.onload = () => {
+        document.getElementById('viewer').src = img.src;
+        errors = 0;
+        i++;
+    };
+    img.onerror = () => {
+        errors++;
+        if(errors > max_errors) {
+            console.log("No more frames");
+        }
+    };
+    img.src = 'output/frames/frame_' + String(i).padStart(4, '0') + '.jpg';
+}, 100);
+</script>
+</body>
+</html>

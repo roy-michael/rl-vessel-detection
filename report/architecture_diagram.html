@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RL Vessel Tracking Architecture</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f8f9fa;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 40px;
+        }
+        .mermaid {
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="mermaid">
+        graph TD
+            Agent[RL Tracking Agent<br/>(Policy: Q-Learning / SARSA)]
+            Environment[Acoustic Environment<br/>(Dispatcher & Tracking Processors)]
+            
+            Agent -->|Action: SPAWN, ASSOCIATE, REJECT| Environment
+            Environment -->|State: Distance, Amplitude, Tonality| Agent
+            Environment -->|Reward: +10 Good, -10 Penalty| Agent
+
+            style Agent fill:#8e44ad,stroke:#9b59b6,stroke-width:2px,color:#fff
+            style Environment fill:#27ae60,stroke:#2ecc71,stroke-width:2px,color:#fff
+    </div>
+
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+        mermaid.initialize({ startOnLoad: true, theme: 'default' });
+    </script>
+</body>
+</html>
