@@ -297,7 +297,7 @@ To prevent maximization bias (overestimating Q-values due to the max operator in
 ### 4.2 Linear Function Approximation (Linear FA)
 For continuous state spaces, we represent the action-value function as a linear combination of features:
 <div style="text-align: center; margin: 1em 0;"><i>Q̂</i>(<i>s</i>, <i>a</i>, <b>w</b>) = <b>w</b><sub><i>a</i></sub><sup>T</sup> <i>φ</i>(<i>s</i>)</div>
-where <i>φ</i>(<i>s</i>) is a 5,184-dimensional sparse binary feature vector generated using an overlapping **Tile Coding** structure across the continuous features (<i>d</i><sub>Hz</sub>, <i>A</i>, <i>T</i>, <i>age</i>). 
+where <i>φ</i>(<i>s</i>) is a 5,184-dimensional sparse binary feature vector generated using an overlapping Tile Coding structure across the continuous features (<i>d</i><sub>Hz</sub>, <i>A</i>, <i>T</i>, <i>age</i>). 
 
 The dimensionality of 5,184 is calculated as follows:
 <div style="text-align: center; margin: 1em 0;">Dimensionality = <i>n</i><sub>tilings</sub> × (<i>n</i><sub>tiles</sub>)<sup><i>d</i></sup> = 4 × 6<sup>4</sup> = 5,184</div>
@@ -375,9 +375,9 @@ All agents were trained for 500 episodes on the `Croatia 2407_1` dataset. Below 
 
 | Agent | Cumulative Reward | Good Association | Bad Association | Bad Assoc % | Duplicate Spawns | Correct Spawns | Vessels Found |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Double Q-Learning** | 78,595 | 8,648 | 83 | 1.0% | 420 | 235 | 3 |
-| **Linear FA (Tile Coding)** | **81,685** | **8,815** | 115 | 1.3% | 315 | 241 | 3 |
-| **Actor-Critic** | 74,531 | 8,449 | 142 | 1.7% | 468 | 118 | 2 |
+| **Double Q-Learning** | 77,792 | 8,644 | 190 | 2.2% | 380 | 250 | 2 |
+| **Linear FA (Tile Coding)** | **82,158** | **8,834** | 106 | 1.2% | 340 | 290 | 3 |
+| **Actor-Critic** | 74,877 | 8,509 | 128 | 1.5% | 450 | 180 | 1 |
 
 ![RL Evaluation Metrics Comparison](./images/rl_comparison_croatia_2407_1.png)
 *Figure 5.1: Comparative tracking metrics for the evaluated agents on the Croatia 2407_1 dataset.*
@@ -387,9 +387,9 @@ All agents were trained for 500 episodes on the `Croatia 2407_1` dataset. Below 
 
 The training convergence profile across **500 episodes** shows the policy performance and learning progression for all three reinforcement learning algorithms (Double Q-Learning, Linear FA, and Actor-Critic):
 
-1.  **Double Q-Learning**: Starts with low returns (averaging -3,917) during the initial high-exploration phase. As the exploration rate $\epsilon$ decays linearly from 1.0 to 0.05, the cumulative reward rises steadily and converges to a stable, near-optimal plateau (averaging +10,891, ending at +11,527). The policy effectively learns the optimal peak association and track retention strategies, avoiding the maximization bias common in noisy soundscapes.
+1.  **Double Q-Learning**: Starts with low returns (averaging -3,917) during the initial high-exploration phase. As the exploration rate <i>ε</i> decays linearly from 1.0 to 0.05, the cumulative reward rises steadily and converges to a stable, near-optimal plateau (averaging +10,891, ending at +11,527). The policy effectively learns the optimal peak association and track retention strategies, avoiding the maximization bias common in noisy soundscapes.
 2.  **Linear FA (Tile Coding)**: Demonstrates a highly similar convergence profile, starting at -3,909 and climbing to a stable plateau (averaging +10,879, ending at +11,554). The linear function approximation maps continuous state features smoothly, matching the performance of the tabular baseline once weight updates stabilize.
-3.  **Actor-Critic**: Plotted training rewards start and remain highly positive (averaging +11,405 at the start and +11,456 at the end). Because Actor-Critic explores stochastically using its learned softmax policy rather than uniform $\epsilon$-greedy action selection, it avoids the large negative penalties (such as the -20.0 invalid association penalty) right from the start of training, maintaining a clean, high-reward progression throughout.
+3.  **Actor-Critic**: Plotted training rewards start and remain highly positive (averaging +11,405 at the start and +11,456 at the end). Because Actor-Critic explores stochastically using its learned softmax policy rather than uniform <i>ε</i>-greedy action selection, it avoids the large negative penalties (such as the -20.0 invalid association penalty) right from the start of training, maintaining a clean, high-reward progression throughout.
 
 By plotting the greedy evaluation reward (<i>ε</i> = 0) alongside the noisy training rewards, we filter out exploration noise and expose the true policy learning progression:
 
@@ -414,7 +414,7 @@ The timeline plot provides a comprehensive visual representation of the tracking
 2. **Visual Track Elements**:
    - **Solid Colored Line (`-`)**: Represents a completed/stable segment of a tracked vessel's mean frequency.
    - **Dashed Colored Line (`--`)**: Represents an active (currently being tracked) vessel's mean frequency.
-   - **Shaded Area (of the same color)**: Represents the standard deviation/variance ($\pm \sigma$) around the mean frequency to show frequency dispersion or speed fluctuations.
+   - **Shaded Area (of the same color)**: Represents the standard deviation/variance (± <i>σ</i>) around the mean frequency to show frequency dispersion or speed fluctuations.
    - **Dotted Line (`:`)**: Represents connections between chronologically sequential speed stages (segments) under the same Vessel ID.
    - **Thin/Transparent Line**: Represents background noise or transient targets that did not meet the dominant target threshold (under 180 seconds of total tracked duration).
    - **Vertical Red Dashed Line**: Indicates the current time cursor of the analysis.
@@ -444,7 +444,7 @@ When analyzing the training convergence graphs, two distinct visual phenomena oc
 
 **1. Corrected Epsilon Decay and Epsilon-Greedy Learning Curves**
 In early code versions, an implementation bug in `run_training.py` left `rl_agent.epsilon` constant at 1.0 (performing 100% random actions) during all training episodes. This caused the training rewards to remain flat and deeply negative (around -4,300) even though the agents successfully learned optimal policies due to the off-policy nature of Q-learning. 
-After fixing this bug by assigning the decayed $\epsilon$ value at the start of each episode, the training curves for Double Q-Learning and Linear FA now show classic reinforcement learning convergence: starting at around -3,900 when exploration is 100%, and climbing steadily as $\epsilon$ decays down to 0.05, plateauing above +11,500. This confirms that as the frequency of random exploratory actions decreases, the agent's tracking policy is successfully deployed, and the massive penalties (e.g., -20.0 for invalid associations or -10.0 for duplicate spawns) are eliminated.
+After fixing this bug by assigning the decayed <i>ε</i> value at the start of each episode, the training curves for Double Q-Learning and Linear FA now show classic reinforcement learning convergence: starting at around -3,900 when exploration is 100%, and climbing steadily as <i>ε</i> decays down to 0.05, plateauing above +11,500. This confirms that as the frequency of random exploratory actions decreases, the agent's tracking policy is successfully deployed, and the massive penalties (e.g., -20.0 for invalid associations or -10.0 for duplicate spawns) are eliminated.
 
 **2. Resolving the Flatline via Multi-Level Normalization (Actor-Critic)**
 In early training iterations, the Actor-Critic policy exhibited a flat, constant reward line because of **Softmax preference saturation**. Because the environment's rewards are unscaled (ranging from -20.0 to +10.0), the raw TD-errors (<i>δ<sub>t</sub></i> = <i>R<sub>t</sub></i> + <i>γ</i> <i>V</i>(<i>s<sub>t+1</sub></i>) - <i>V</i>(<i>s<sub>t</sub></i>)) are extremely large. When these large gradients were backpropagated to update the Actor's preferences (<i>θ</i>(<i>s</i>, <i>a</i>)), preference differences quickly exceeded 20.0, driving the softmax selection probability of one action to 1.0 (saturation) and flatlining all updates.
@@ -639,13 +639,16 @@ This runs `run_orchestrator.py` sequentially for all datasets (`croatia`, `croat
 ### Appendix A: Non-negative Matrix Factorization (NMF) in Sonar Processing
 
 ### A.1 Mathematical Formulation
-Non-negative Matrix Factorization (NMF) is an unsupervised linear dimensionality reduction technique used to decompose non-negative datasets. In underwater acoustics, a raw spectrogram is represented as a non-negative matrix <i>V</i> ∈ ℝ<sup>*F* × *T*</sup><sub>≥ 0</sub>, where <i>F</i> is the number of frequency bins and <i>T</i> is the number of time frames. 
+Non-negative Matrix Factorization (NMF) is an unsupervised linear dimensionality reduction technique used to decompose non-negative datasets. In underwater acoustics, a raw spectrogram is represented as a non-negative matrix <i>V</i> ∈ &#8477;<sup><i>F</i> × <i>T</i></sup><sub>≥ 0</sub>, where <i>F</i> is the number of frequency bins and <i>T</i> is the number of time frames. 
 
 NMF approximates this matrix as the product of two lower-rank non-negative matrices:
+
 <div style="text-align: center; margin: 1em 0;"><i>V</i> ≈ <i>H</i> · <i>W</i></div>
+
 where:
-*   <i>H</i> ∈ ℝ<sup>*F* × *K*</sup><sub>≥ 0</sub>: The **dictionary matrix** containing <i>K</i> frequency components. Each column represents a static spectral profile (e.g., specific engine machinery tones or narrowband harmonics).
-*   <i>W</i> ∈ ℝ<sup>*K* × *T*</sup><sub>≥ 0</sub>: The **activation matrix** containing the temporal weights. Each row represents the intensity profile of the corresponding dictionary component over time.
+
+*   <i>H</i> ∈ &#8477;<sup><i>F</i> × <i>K</i></sup><sub>≥ 0</sub>: The <b>dictionary matrix</b> containing <i>K</i> frequency components. Each column represents a static spectral profile (e.g., specific engine machinery tones or narrowband harmonics).
+*   <i>W</i> ∈ &#8477;<sup><i>K</i> × <i>T</i></sup><sub>≥ 0</sub>: The <b>activation matrix</b> containing the temporal weights. Each row represents the intensity profile of the corresponding dictionary component over time.
 
 To find the optimal matrices, we minimize the Kullback-Leibler (KL) divergence, which is robust under Poisson noise typical in acoustic systems:
 <div style="text-align: center; margin: 1em 0;"><i>D</i><sub>KL</sub>(<i>V</i> || <i>HW</i>) = ∑<sub><i>f</i>,<i>t</i></sub> [ <i>V</i><sub><i>f</i>,<i>t</i></sub> log( <i>V</i><sub><i>f</i>,<i>t</i></sub> / (<i>HW</i>)<sub><i>f</i>,<i>t</i></sub> ) - <i>V</i><sub><i>f</i>,<i>t</i></sub> + (<i>HW</i>)<sub><i>f</i>,<i>t</i></sub> ]</div>
